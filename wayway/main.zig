@@ -1,5 +1,8 @@
 const std = @import("std");
 const wayland = @import("wayland");
+const c = @cImport({
+    @cInclude("dbus/dbus.h");
+});
 
 const wl = wayland.client.wl;
 const ext = wayland.client.ext;
@@ -42,6 +45,15 @@ const Rectangle = struct {
 };
 
 pub fn main() !void {
+    const conn = c.dbus_bus_get(c.DBUS_BUS_SESSION, null);
+    if (conn == null) {
+        std.debug.print("Failed to connect to D-Bus\n", .{});
+        return error.DBusConnectionNull;
+    }
+    defer c.dbus_connection_unref(conn);
+
+    try listBusNames(conn);
+
     var display = try wl.Display.connect(null);
     defer display.disconnect();
 
@@ -238,4 +250,50 @@ fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, _: *Wayway) void
         },
         else => {},
     }
+}
+
+fn listBusNames(conn: ?*c.DBusConnection) !void {
+    std.debug.print("=== Listing D-Bus names ===\n", .{});
+
+    const msg = c.dbus_message_new_method_call(
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "ListNames",
+    );
+    if (msg == null) {
+        return error.MessageCreateFailed;
+    }
+    defer c.dbus_message_unref(msg);
+
+    const reply = c.dbus_connection_send_with_reply_and_block(conn, msg, 1000, null);
+    if (reply == null) {
+        std.debug.print("No reply received\n", .{});
+        return error.NoReply;
+    }
+    defer c.dbus_message_unref(reply);
+
+    var iter: c.DBusMessageIter = undefined;
+    if (c.dbus_message_iter_init(reply, &iter) == 0) {
+        std.debug.print("No names found\n", .{});
+        return;
+    }
+
+    var array_iter: c.DBusMessageIter = undefined;
+    c.dbus_message_iter_recurse(&iter, &array_iter);
+
+    var count: usize = 0;
+    while (c.dbus_message_iter_get_arg_type(&array_iter) != c.DBUS_TYPE_INVALID) {
+        var name: [*c]const u8 = undefined;
+        // Cast to *anyopaque as expected by the function
+        c.dbus_message_iter_get_basic(&array_iter, @ptrCast(&name));
+        std.debug.print("  {s}\n", .{name});
+        _ = c.dbus_message_iter_next(&array_iter);
+        count += 1;
+        if (count >= 20) {
+            std.debug.print("  ... and more\n", .{});
+            break;
+        }
+    }
+    std.debug.print("Total names listed: {d}\n\n", .{count});
 }

@@ -16,6 +16,7 @@
           wayland-protocols
           wayland
           pkg-config
+          dbus
         ];
       };
     };

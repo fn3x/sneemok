@@ -19,6 +19,7 @@ pub fn build(b: *std.Build) void {
     scanner.generate("wl_seat", 7);
     scanner.generate("wl_data_device_manager", 3);
     scanner.generate("xdg_wm_base", 1);
+
     scanner.generate("ext_image_copy_capture_manager_v1", 1);
 
     const wayland = b.createModule(.{ .root_source_file = scanner.result });
@@ -34,7 +35,12 @@ pub fn build(b: *std.Build) void {
 
     wayway.linkLibC();
     wayway.linkSystemLibrary("wayland-client");
+    wayway.linkSystemLibrary("dbus-1");
     wayway.root_module.addImport("wayland", wayland);
+
+    wayway.addIncludePath(.{ .cwd_relative = "/usr/include/dbus-1.0" });
+    wayway.addIncludePath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/dbus-1.0/include" });
+    wayway.addIncludePath(.{ .cwd_relative = "/usr/lib/dbus-1.0/include" });
 
     b.installArtifact(wayway);
     const run_exe = b.addRunArtifact(wayway);
