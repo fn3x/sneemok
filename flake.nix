@@ -17,6 +17,10 @@
           wayland
           pkg-config
           dbus
+          libxkbcommon
+          pixman
+          wlroots
+          wlr-protocols
         ];
       };
     };
