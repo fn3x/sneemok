@@ -50,6 +50,8 @@ pub fn build(b: *std.Build) void {
     shutter.linkSystemLibrary("dbus-1");
     shutter.linkSystemLibrary("wayland-cursor");
 
+    shutter.addIncludePath(b.path("headers"));
+
     shutter.root_module.addImport("wayland", wayland);
     shutter.root_module.addImport("xkbcommon", xkbcommon);
     shutter.root_module.addImport("pixman", pixman);

@@ -1,6 +1,10 @@
 const std = @import("std");
 const wayland = @import("wayland");
 const c = @cImport({
+    @cDefine("STB_IMAGE_IMPLEMENTATION", "");
+    @cDefine("STBI_ONLY_PNG", "1");  // Only PNG support
+    @cDefine("STBI_NO_SIMD", "1");
+    @cInclude("stb_image.h");
     @cInclude("dbus/dbus.h");
 });
 
@@ -33,6 +37,7 @@ const Context = struct {
     wl_keyboard: ?*wl.Keyboard = null,
 
     currentRect: *const Rectangle,
+    image: ?[*c]u8 = null,
 };
 
 const Rectangle = struct {
@@ -56,17 +61,8 @@ pub fn main() !void {
         return error.ScreenshotPortalNotAvailable;
     }
 
-    const firstURI = try getScreenshotURI(conn);
-    std.log.info("first uri: {s}", .{firstURI});
-
-    const secondURI = try getScreenshotURI(conn);
-    std.log.info("second uri: {s}", .{secondURI});
-
-    var display = try wl.Display.connect(null);
-    defer display.disconnect();
-
-    const registry = try display.getRegistry();
-    defer registry.destroy();
+    const uri = try getScreenshotURI(conn);
+    std.log.info("uri: {s}", .{uri});
 
     const width: i32 = 400;
     const height: i32 = 400;
@@ -81,10 +77,33 @@ pub fn main() !void {
         .size = size,
         .color = color,
     };
-
     var context: Context = .{
         .currentRect = &rect,
     };
+
+    var image_width: c_int = undefined;
+    var image_height: c_int = undefined;
+    var channels: c_int = undefined;
+
+    // Strip "file://" prefix (7 characters)
+    const uri_str = std.mem.span(uri);
+    const file_path = uri_str[7..];
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path_z = try std.fmt.bufPrintZ(&path_buf, "{s}", .{file_path});
+
+    context.image = c.stbi_load(path_z.ptr, &image_width, &image_height, &channels, 4);
+    if (context.image == null) {
+        return error.ImageLoadFailed;
+    }
+
+    std.debug.print("Loaded screenshot: {}x{}\n", .{image_width, image_height});
+
+    var display = try wl.Display.connect(null);
+    defer display.disconnect();
+
+    const registry = try display.getRegistry();
+    defer registry.destroy();
 
     registry.setListener(*Context, registry_listener, &context);
 
