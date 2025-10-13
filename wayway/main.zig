@@ -56,6 +56,12 @@ pub fn main() !void {
         return error.ScreenshotPortalNotAvailable;
     }
 
+    const firstURI = try getScreenshotURI(conn);
+    std.log.info("first uri: {s}", .{firstURI});
+
+    const secondURI = try getScreenshotURI(conn);
+    std.log.info("second uri: {s}", .{secondURI});
+
     var display = try wl.Display.connect(null);
     defer display.disconnect();
 
@@ -86,7 +92,7 @@ pub fn main() !void {
         return error.RoundTripFailed;
     }
 
-    std.log.info("connection established!", .{});
+    std.log.info("Wayland connection established", .{});
 
     wayway.wl_surface = try wayway.wl_compositor.?.createSurface();
 
@@ -255,6 +261,8 @@ fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, _: *Wayway) void
 }
 
 fn checkScreenshotPortal(conn: ?*c.DBusConnection) !bool {
+    std.log.debug("Checking screenshot portal", .{});
+
     const msg = c.dbus_message_new_method_call(
         "org.freedesktop.DBus",
         "/org/freedesktop/DBus",
@@ -292,4 +300,146 @@ fn checkScreenshotPortal(conn: ?*c.DBusConnection) !bool {
     }
 
     return false;
+}
+
+fn getScreenshotRequestHandle(conn: ?*c.DBusConnection) ![*c]const u8 {
+    std.log.debug("Requesting screenshot handle via d-bus", .{});
+
+    const msg = c.dbus_message_new_method_call(
+        "org.freedesktop.portal.Desktop",
+        "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.Screenshot",
+        "Screenshot",
+    );
+    if (msg == null) {
+        return error.MessageCreateFailed;
+    }
+
+    defer c.dbus_message_unref(msg);
+
+    var iter: c.DBusMessageIter = undefined;
+    c.dbus_message_iter_init_append(msg, &iter);
+
+    const parent_window: [*c]const u8 = "";
+    if (c.dbus_message_iter_append_basic(&iter, c.DBUS_TYPE_STRING, @ptrCast(&parent_window)) == 0) {
+        return error.AppendFailed;
+    }
+
+    var dict_iter: c.DBusMessageIter = undefined;
+    if (c.dbus_message_iter_open_container(&iter, c.DBUS_TYPE_ARRAY, "{sv}", &dict_iter) == 0) {
+        return error.ContainerOpenFailed;
+    }
+
+    try appendDictBoolEntry(&dict_iter, "interactive", false);
+    try appendDictBoolEntry(&dict_iter, "modal", false);
+
+    if (c.dbus_message_iter_close_container(&iter, &dict_iter) == 0) {
+        return error.ContainerCloseFailed;
+    }
+
+    const reply = c.dbus_connection_send_with_reply_and_block(conn, msg, -1, null);
+    if (reply == null) {
+        std.log.err("Failed to get reply\n", .{});
+        return error.NoReply;
+    }
+    defer c.dbus_message_unref(reply);
+
+    var reply_iter: c.DBusMessageIter = undefined;
+    if (c.dbus_message_iter_init(reply, &reply_iter) == 0) {
+        return error.NoResponseData;
+    }
+
+    var request_handle: [*c]const u8 = undefined;
+    c.dbus_message_iter_get_basic(&reply_iter, @ptrCast(&request_handle));
+
+    return request_handle;
+}
+
+fn appendDictBoolEntry(dict_iter: *c.DBusMessageIter, key: [*c]const u8, value: bool) !void {
+    var entry_iter: c.DBusMessageIter = undefined;
+    if (c.dbus_message_iter_open_container(dict_iter, c.DBUS_TYPE_DICT_ENTRY, null, &entry_iter) == 0) {
+        return error.DictEntryOpenFailed;
+    }
+
+    if (c.dbus_message_iter_append_basic(&entry_iter, c.DBUS_TYPE_STRING, @ptrCast(&key)) == 0) {
+        return error.AppendKeyFailed;
+    }
+
+    var variant_iter: c.DBusMessageIter = undefined;
+    if (c.dbus_message_iter_open_container(&entry_iter, c.DBUS_TYPE_VARIANT, "b", &variant_iter) == 0) {
+        return error.VariantOpenFailed;
+    }
+
+    const bool_val: u32 = if (value) 1 else 0;
+    if (c.dbus_message_iter_append_basic(&variant_iter, c.DBUS_TYPE_BOOLEAN, @ptrCast(&bool_val)) == 0) {
+        return error.AppendValueFailed;
+    }
+
+    if (c.dbus_message_iter_close_container(&entry_iter, &variant_iter) == 0) {
+        return error.VariantCloseFailed;
+    }
+
+    if (c.dbus_message_iter_close_container(dict_iter, &entry_iter) == 0) {
+        return error.DictEntryCloseFailed;
+    }
+}
+
+fn getScreenshotURI(conn: ?*c.DBusConnection) ![*c]const u8 {
+    const request_handle = try getScreenshotRequestHandle(conn);
+    std.log.debug("Request handle: {s}\n", .{request_handle});
+
+    var buf: [512]u8 = undefined;
+    const match_rule = try std.fmt.bufPrintZ(&buf, "type='signal',interface='org.freedesktop.portal.Request',member='Response',path='{s}'", .{request_handle});
+
+    c.dbus_bus_add_match(conn, match_rule.ptr, null);
+    c.dbus_connection_flush(conn);
+
+    while (c.dbus_connection_read_write(conn, @intCast(2000)) != 0) {
+        const message = c.dbus_connection_pop_message(conn);
+        if (message == null) {
+            continue;
+        }
+        defer c.dbus_message_unref(message);
+
+        if (c.dbus_message_is_signal(message, "org.freedesktop.portal.Request", "Response") == 0) {
+            continue;
+        }
+
+        var iter: c.DBusMessageIter = undefined;
+        if (c.dbus_message_iter_init(message, &iter) == 0) {
+            return error.DbusNoArguments;
+        }
+
+        var response_code: u32 = undefined;
+        c.dbus_message_iter_get_basic(&iter, @ptrCast(&response_code));
+
+        _ = c.dbus_message_iter_next(&iter);
+
+        var dict_iter: c.DBusMessageIter = undefined;
+        c.dbus_message_iter_recurse(&iter, &dict_iter);
+
+        while (c.dbus_message_iter_get_arg_type(&dict_iter) != c.DBUS_TYPE_INVALID) {
+            var entry_iter: c.DBusMessageIter = undefined;
+            c.dbus_message_iter_recurse(&dict_iter, &entry_iter);
+
+            var key: [*c]const u8 = undefined;
+            c.dbus_message_iter_get_basic(&entry_iter, @ptrCast(&key));
+
+            _ = c.dbus_message_iter_next(&entry_iter);
+
+            if (std.mem.eql(u8, std.mem.span(key), "uri")) {
+                var variant_iter: c.DBusMessageIter = undefined;
+                c.dbus_message_iter_recurse(&entry_iter, &variant_iter);
+
+                var uri: [*c]const u8 = undefined;
+                c.dbus_message_iter_get_basic(&variant_iter, @ptrCast(&uri));
+
+                return uri;
+            }
+
+            _ = c.dbus_message_iter_next(&dict_iter);
+        }
+    }
+
+    return error.DbusTimeout;
 }
