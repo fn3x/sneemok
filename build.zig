@@ -36,31 +36,31 @@ pub fn build(b: *std.Build) void {
     wlroots.resolved_target = target;
     wlroots.linkSystemLibrary("wlroots-0.19", .{});
 
-    const wayway = b.addExecutable(.{
-        .name = "wayway",
+    const shutter = b.addExecutable(.{
+        .name = "shutter",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("wayway/main.zig"),
+            .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
 
-    wayway.linkLibC();
-    wayway.linkSystemLibrary("wayland-client");
-    wayway.linkSystemLibrary("dbus-1");
-    wayway.linkSystemLibrary("wayland-cursor");
+    shutter.linkLibC();
+    shutter.linkSystemLibrary("wayland-client");
+    shutter.linkSystemLibrary("dbus-1");
+    shutter.linkSystemLibrary("wayland-cursor");
 
-    wayway.root_module.addImport("wayland", wayland);
-    wayway.root_module.addImport("xkbcommon", xkbcommon);
-    wayway.root_module.addImport("pixman", pixman);
-    wayway.root_module.addImport("wlroots", wlroots);
+    shutter.root_module.addImport("wayland", wayland);
+    shutter.root_module.addImport("xkbcommon", xkbcommon);
+    shutter.root_module.addImport("pixman", pixman);
+    shutter.root_module.addImport("wlroots", wlroots);
 
-    wayway.addIncludePath(.{ .cwd_relative = "/usr/include/dbus-1.0" });
-    wayway.addIncludePath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/dbus-1.0/include" });
-    wayway.addIncludePath(.{ .cwd_relative = "/usr/lib/dbus-1.0/include" });
+    shutter.addIncludePath(.{ .cwd_relative = "/usr/include/dbus-1.0" });
+    shutter.addIncludePath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/dbus-1.0/include" });
+    shutter.addIncludePath(.{ .cwd_relative = "/usr/lib/dbus-1.0/include" });
 
-    b.installArtifact(wayway);
-    const run_exe = b.addRunArtifact(wayway);
+    b.installArtifact(shutter);
+    const run_exe = b.addRunArtifact(shutter);
 
     const run_step = b.step("run", "Run the application");
     run_step.dependOn(&run_exe.step);

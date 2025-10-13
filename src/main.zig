@@ -19,7 +19,7 @@ const EventInterfaces = enum {
     wl_seat,
 };
 
-const Wayway = struct {
+const Context = struct {
     const Self = @This();
 
     wl_compositor: ?*wl.Compositor = null,
@@ -82,11 +82,11 @@ pub fn main() !void {
         .color = color,
     };
 
-    var wayway: Wayway = .{
+    var context: Context = .{
         .currentRect = &rect,
     };
 
-    registry.setListener(*Wayway, registry_listener, &wayway);
+    registry.setListener(*Context, registry_listener, &context);
 
     if (display.roundtrip() != .SUCCESS) {
         return error.RoundTripFailed;
@@ -94,16 +94,16 @@ pub fn main() !void {
 
     std.log.info("Wayland connection established", .{});
 
-    wayway.wl_surface = try wayway.wl_compositor.?.createSurface();
+    context.wl_surface = try context.wl_compositor.?.createSurface();
 
-    wayway.xdg_surface = try wayway.xdg_wm_base.?.getXdgSurface(wayway.wl_surface.?);
-    wayway.xdg_surface.?.setListener(*Wayway, xdg_surface_listener, &wayway);
+    context.xdg_surface = try context.xdg_wm_base.?.getXdgSurface(context.wl_surface.?);
+    context.xdg_surface.?.setListener(*Context, xdg_surface_listener, &context);
 
-    wayway.xdg_toplevel = try wayway.xdg_surface.?.getToplevel();
-    wayway.xdg_toplevel.?.setListener(*Wayway, xdg_toplevel_listener, &wayway);
-    wayway.xdg_toplevel.?.setTitle("Wayland Rectangle");
+    context.xdg_toplevel = try context.xdg_surface.?.getToplevel();
+    context.xdg_toplevel.?.setListener(*Context, xdg_toplevel_listener, &context);
+    context.xdg_toplevel.?.setTitle("Wayland Rectangle");
 
-    wayway.wl_surface.?.commit();
+    context.wl_surface.?.commit();
 
     if (display.roundtrip() != .SUCCESS) {
         return error.RoundTripFailed;
@@ -114,42 +114,42 @@ pub fn main() !void {
     }
 }
 
-fn draw(wayway: *Wayway) !void {
+fn draw(context: *Context) !void {
     const shm_name = "/wayland-shm-XXXXXX";
     const fd = os.linux.memfd_create(shm_name, 0);
     defer _ = os.linux.close(@intCast(fd));
 
-    _ = os.linux.ftruncate(@intCast(fd), wayway.currentRect.size);
+    _ = os.linux.ftruncate(@intCast(fd), context.currentRect.size);
 
     const data = os.linux.mmap(
         null,
-        @intCast(wayway.currentRect.size),
+        @intCast(context.currentRect.size),
         os.linux.PROT.READ | os.linux.PROT.WRITE,
         .{ .TYPE = .SHARED },
         @intCast(fd),
         0,
     );
-    defer _ = os.linux.munmap(@ptrFromInt(data), @intCast(wayway.currentRect.size));
+    defer _ = os.linux.munmap(@ptrFromInt(data), @intCast(context.currentRect.size));
 
-    const byte_slice = @as([*]u8, @ptrFromInt(data))[0..@intCast(wayway.currentRect.size)];
+    const byte_slice = @as([*]u8, @ptrFromInt(data))[0..@intCast(context.currentRect.size)];
     const pixels = std.mem.bytesAsSlice(u32, byte_slice);
     for (pixels) |*pixel| {
-        pixel.* = wayway.currentRect.color;
+        pixel.* = context.currentRect.color;
     }
 
-    const pool = try wayway.wl_shm.?.createPool(@intCast(fd), wayway.currentRect.size);
-    const buffer = try pool.createBuffer(0, wayway.currentRect.width, wayway.currentRect.height, wayway.currentRect.stride, .argb8888);
+    const pool = try context.wl_shm.?.createPool(@intCast(fd), context.currentRect.size);
+    const buffer = try pool.createBuffer(0, context.currentRect.width, context.currentRect.height, context.currentRect.stride, .argb8888);
 
     pool.destroy();
 
-    buffer.setListener(*Wayway, wl_buffer_listener, wayway);
+    buffer.setListener(*Context, wl_buffer_listener, context);
 
-    wayway.wl_surface.?.attach(buffer, 0, 0);
-    wayway.wl_surface.?.damage(0, 0, wayway.currentRect.width, wayway.currentRect.height);
-    wayway.wl_surface.?.commit();
+    context.wl_surface.?.attach(buffer, 0, 0);
+    context.wl_surface.?.damage(0, 0, context.currentRect.width, context.currentRect.height);
+    context.wl_surface.?.commit();
 }
 
-fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, wayshot: *Wayway) void {
+fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, wayshot: *Context) void {
     switch (event) {
         .global => |global| {
             const event_str = std.meta.stringToEnum(EventInterfaces, mem.span(global.interface)) orelse return;
@@ -184,7 +184,7 @@ fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, wayshot: 
                         wl.Seat,
                         wl.Seat.generated_version,
                     ) catch @panic("Failed to bind wl_seat");
-                    wayshot.wl_seat.?.setListener(*Wayway, seat_listener, wayshot);
+                    wayshot.wl_seat.?.setListener(*Context, seat_listener, wayshot);
                     std.log.info("wl_seat event", .{});
                 },
                 .xdg_wm_base => {
@@ -193,7 +193,7 @@ fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, wayshot: 
                         xdg.WmBase,
                         xdg.WmBase.generated_version,
                     ) catch @panic("Failed to bind xdg_wm_base");
-                    wayshot.xdg_wm_base.?.setListener(*Wayway, wm_base_listener, wayshot);
+                    wayshot.xdg_wm_base.?.setListener(*Context, wm_base_listener, wayshot);
                     std.log.info("xdg_wm_base event", .{});
                 },
             }
@@ -202,7 +202,7 @@ fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, wayshot: 
     }
 }
 
-fn wl_buffer_listener(buffer: *wl.Buffer, event: wl.Buffer.Event, _: *Wayway) void {
+fn wl_buffer_listener(buffer: *wl.Buffer, event: wl.Buffer.Event, _: *Context) void {
     switch (event) {
         .release => {
             buffer.destroy();
@@ -210,7 +210,7 @@ fn wl_buffer_listener(buffer: *wl.Buffer, event: wl.Buffer.Event, _: *Wayway) vo
     }
 }
 
-fn wm_base_listener(wm_base: *xdg.WmBase, event: xdg.WmBase.Event, _: *Wayway) void {
+fn wm_base_listener(wm_base: *xdg.WmBase, event: xdg.WmBase.Event, _: *Context) void {
     switch (event) {
         .ping => |ping| {
             wm_base.pong(ping.serial);
@@ -218,16 +218,16 @@ fn wm_base_listener(wm_base: *xdg.WmBase, event: xdg.WmBase.Event, _: *Wayway) v
     }
 }
 
-fn xdg_surface_listener(xdg_surface: *xdg.Surface, event: xdg.Surface.Event, wayway: *Wayway) void {
+fn xdg_surface_listener(xdg_surface: *xdg.Surface, event: xdg.Surface.Event, shutter: *Context) void {
     switch (event) {
         .configure => |configure| {
             xdg_surface.ackConfigure(configure.serial);
-            draw(wayway) catch return;
+            draw(shutter) catch return;
         },
     }
 }
 
-fn xdg_toplevel_listener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, _: *Wayway) void {
+fn xdg_toplevel_listener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, _: *Context) void {
     switch (event) {
         .configure => {},
         .close => {
@@ -236,19 +236,19 @@ fn xdg_toplevel_listener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, _: *Wayway
     }
 }
 
-fn seat_listener(seat: *wl.Seat, event: wl.Seat.Event, wayway: *Wayway) void {
+fn seat_listener(seat: *wl.Seat, event: wl.Seat.Event, shutter: *Context) void {
     switch (event) {
         .capabilities => |caps| {
             if (caps.capabilities.keyboard) {
-                wayway.wl_keyboard = seat.getKeyboard() catch return;
-                wayway.wl_keyboard.?.setListener(*Wayway, keyboard_listener, wayway);
+                shutter.wl_keyboard = seat.getKeyboard() catch return;
+                shutter.wl_keyboard.?.setListener(*Context, keyboard_listener, shutter);
             }
         },
         .name => {},
     }
 }
 
-fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, _: *Wayway) void {
+fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, _: *Context) void {
     switch (event) {
         .key => |key| {
             if (key.state == .pressed and key.key == 1) { // ESC key
