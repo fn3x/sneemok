@@ -2,7 +2,7 @@ const std = @import("std");
 const wayland = @import("wayland");
 const c = @cImport({
     @cDefine("STB_IMAGE_IMPLEMENTATION", "");
-    @cDefine("STBI_ONLY_PNG", "1");  // Only PNG support
+    @cDefine("STBI_ONLY_PNG", "1");
     @cDefine("STBI_NO_SIMD", "1");
     @cInclude("stb_image.h");
     @cInclude("dbus/dbus.h");
@@ -10,6 +10,7 @@ const c = @cImport({
 
 const wl = wayland.client.wl;
 const wl_server = wayland.server.wl;
+const zwlr = wayland.client.zwlr;
 const xdg = wayland.client.xdg;
 
 const mem = std.mem;
@@ -21,31 +22,44 @@ const EventInterfaces = enum {
     wl_shm,
     xdg_wm_base,
     wl_seat,
+    zwlr_layer_shell_v1,
+    wl_subcompositor,
 };
 
 const Context = struct {
-    const Self = @This();
-
     wl_compositor: ?*wl.Compositor = null,
     wl_shm: ?*wl.Shm = null,
     wl_surface: ?*wl.Surface = null,
     wl_output: ?*wl.Output = null,
+    wl_pointer: ?*wl.Pointer = null,
+    wl_subcompositor: ?*wl.Subcompositor = null,
+    selection_surface: ?*wl.Surface = null,
+    selection_subsurface: ?*wl.Subsurface = null,
     xdg_surface: ?*xdg.Surface = null,
     xdg_toplevel: ?*xdg.Toplevel = null,
     xdg_wm_base: ?*xdg.WmBase = null,
     wl_seat: ?*wl.Seat = null,
     wl_keyboard: ?*wl.Keyboard = null,
+    zwlr_layer_shell: ?*zwlr.LayerShellV1 = null,
 
-    currentRect: *const Rectangle,
     image: ?[*c]u8 = null,
-};
+    width: i32 = 0,
+    height: i32 = 0,
 
-const Rectangle = struct {
-    width: i32,
-    height: i32,
-    stride: i32,
-    size: i32,
-    color: u32,
+    selection_active: bool = false,
+    selection_start_x: i32 = 0,
+    selection_start_y: i32 = 0,
+    selection_end_x: i32 = 0,
+    selection_end_y: i32 = 0,
+
+    pointer_x: i32 = 0,
+    pointer_y: i32 = 0,
+
+    selection_buffer: ?*wl.Buffer = null,
+    selection_fd: i32 = -1,
+    selection_data: ?*anyopaque = null,
+    selection_buffer_width: i32 = 0,
+    selection_buffer_height: i32 = 0,
 };
 
 pub fn main() !void {
@@ -64,22 +78,7 @@ pub fn main() !void {
     const uri = try getScreenshotURI(conn);
     std.log.info("uri: {s}", .{uri});
 
-    const width: i32 = 400;
-    const height: i32 = 400;
-    const stride: i32 = width * 4;
-    const size: i32 = stride * height;
-    const color: u32 = 0x0000FF;
-
-    const rect: Rectangle = .{
-        .width = width,
-        .height = height,
-        .stride = stride,
-        .size = size,
-        .color = color,
-    };
-    var context: Context = .{
-        .currentRect = &rect,
-    };
+    var context: Context = .{};
 
     var image_width: c_int = undefined;
     var image_height: c_int = undefined;
@@ -97,7 +96,10 @@ pub fn main() !void {
         return error.ImageLoadFailed;
     }
 
-    std.debug.print("Loaded screenshot: {}x{}\n", .{image_width, image_height});
+    std.debug.print("Loaded screenshot: {}x{}\n", .{ image_width, image_height });
+
+    context.width = @intCast(image_width);
+    context.height = @intCast(image_height);
 
     var display = try wl.Display.connect(null);
     defer display.disconnect();
@@ -115,12 +117,22 @@ pub fn main() !void {
 
     context.wl_surface = try context.wl_compositor.?.createSurface();
 
-    context.xdg_surface = try context.xdg_wm_base.?.getXdgSurface(context.wl_surface.?);
-    context.xdg_surface.?.setListener(*Context, xdg_surface_listener, &context);
+    if (context.zwlr_layer_shell) |layer_shell| {
+        const layer_surface = try layer_shell.getLayerSurface(
+            context.wl_surface.?,
+            null,
+            .overlay,
+            "screenshot-tool",
+        );
 
-    context.xdg_toplevel = try context.xdg_surface.?.getToplevel();
-    context.xdg_toplevel.?.setListener(*Context, xdg_toplevel_listener, &context);
-    context.xdg_toplevel.?.setTitle("Wayland Rectangle");
+        layer_surface.setListener(*Context, layer_surface_listener, &context);
+
+        layer_surface.setSize(0, 0);
+        layer_surface.setAnchor(.{ .top = true, .bottom = true, .left = true, .right = true });
+
+        layer_surface.setKeyboardInteractivity(.exclusive);
+        layer_surface.setExclusiveZone(-1);
+    }
 
     context.wl_surface.?.commit();
 
@@ -134,47 +146,53 @@ pub fn main() !void {
 }
 
 fn draw(context: *Context) !void {
+    std.log.debug("Drawing main surface: {}x{}", .{context.width, context.height});
+
     const shm_name = "/wayland-shm-XXXXXX";
     const fd = os.linux.memfd_create(shm_name, 0);
     defer _ = os.linux.close(@intCast(fd));
 
-    _ = os.linux.ftruncate(@intCast(fd), context.currentRect.size);
+    const width = context.width;
+    const height = context.height;
+    const stride = width * 4;
+    const size = stride * height;
+
+    _ = os.linux.ftruncate(@intCast(fd), size);
 
     const data = os.linux.mmap(
         null,
-        @intCast(context.currentRect.size),
+        @intCast(size),
         os.linux.PROT.READ | os.linux.PROT.WRITE,
         .{ .TYPE = .SHARED },
         @intCast(fd),
         0,
     );
-    defer _ = os.linux.munmap(@ptrFromInt(data), @intCast(context.currentRect.size));
+    defer _ = os.linux.munmap(@ptrFromInt(data), @intCast(size));
 
-    const byte_slice = @as([*]u8, @ptrFromInt(data))[0..@intCast(context.currentRect.size)];
-    const pixels = std.mem.bytesAsSlice(u32, byte_slice);
-    for (pixels) |*pixel| {
-        pixel.* = context.currentRect.color;
-    }
+    const byte_slice = @as([*]u8, @ptrFromInt(data))[0..@intCast(size)];
+    const image_bytes = @as([*]u8, @ptrCast(context.image))[0..@intCast(size)];
 
-    const pool = try context.wl_shm.?.createPool(@intCast(fd), context.currentRect.size);
-    const buffer = try pool.createBuffer(0, context.currentRect.width, context.currentRect.height, context.currentRect.stride, .argb8888);
+    @memcpy(byte_slice, image_bytes);
+
+    const pool = try context.wl_shm.?.createPool(@intCast(fd), size);
+    const buffer = try pool.createBuffer(0, width, height, stride, .abgr8888);
 
     pool.destroy();
 
     buffer.setListener(*Context, wl_buffer_listener, context);
 
     context.wl_surface.?.attach(buffer, 0, 0);
-    context.wl_surface.?.damage(0, 0, context.currentRect.width, context.currentRect.height);
+    context.wl_surface.?.damage(0, 0, context.width, context.height);
     context.wl_surface.?.commit();
 }
 
-fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, wayshot: *Context) void {
+fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, context: *Context) void {
     switch (event) {
         .global => |global| {
             const event_str = std.meta.stringToEnum(EventInterfaces, mem.span(global.interface)) orelse return;
             switch (event_str) {
                 .wl_compositor => {
-                    wayshot.wl_compositor = registry.bind(
+                    context.wl_compositor = registry.bind(
                         global.name,
                         wl.Compositor,
                         wl.Compositor.generated_version,
@@ -182,7 +200,7 @@ fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, wayshot: 
                     std.log.info("Got compositor event", .{});
                 },
                 .wl_output => {
-                    wayshot.wl_output = registry.bind(
+                    context.wl_output = registry.bind(
                         global.name,
                         wl.Output,
                         wl.Output.generated_version,
@@ -190,7 +208,7 @@ fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, wayshot: 
                     std.log.info("Got wl_output event", .{});
                 },
                 .wl_shm => {
-                    wayshot.wl_shm = registry.bind(
+                    context.wl_shm = registry.bind(
                         global.name,
                         wl.Shm,
                         wl.Shm.generated_version,
@@ -198,22 +216,38 @@ fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, wayshot: 
                     std.log.info("Got wl_shm event", .{});
                 },
                 .wl_seat => {
-                    wayshot.wl_seat = registry.bind(
+                    context.wl_seat = registry.bind(
                         global.name,
                         wl.Seat,
                         wl.Seat.generated_version,
                     ) catch @panic("Failed to bind wl_seat");
-                    wayshot.wl_seat.?.setListener(*Context, seat_listener, wayshot);
+                    context.wl_seat.?.setListener(*Context, seat_listener, context);
                     std.log.info("wl_seat event", .{});
                 },
+                .wl_subcompositor => {
+                    context.wl_subcompositor = registry.bind(
+                        global.name,
+                        wl.Subcompositor,
+                        wl.Subcompositor.generated_version,
+                    ) catch @panic("Failed to bind wl_subcompositor");
+                    std.log.info("Got wl_subcompositor", .{});
+                },
                 .xdg_wm_base => {
-                    wayshot.xdg_wm_base = registry.bind(
+                    context.xdg_wm_base = registry.bind(
                         global.name,
                         xdg.WmBase,
                         xdg.WmBase.generated_version,
                     ) catch @panic("Failed to bind xdg_wm_base");
-                    wayshot.xdg_wm_base.?.setListener(*Context, wm_base_listener, wayshot);
+                    context.xdg_wm_base.?.setListener(*Context, wm_base_listener, context);
                     std.log.info("xdg_wm_base event", .{});
+                },
+                .zwlr_layer_shell_v1 => {
+                    context.zwlr_layer_shell = registry.bind(
+                        global.name,
+                        zwlr.LayerShellV1,
+                        zwlr.LayerShellV1.generated_version,
+                    ) catch @panic("Failed to bind zwlr_layer_shell_v1");
+                    std.log.info("zwlr_layer_shell_v1 event", .{});
                 },
             }
         },
@@ -246,6 +280,42 @@ fn xdg_surface_listener(xdg_surface: *xdg.Surface, event: xdg.Surface.Event, shu
     }
 }
 
+fn layer_surface_listener(layer_surface: *zwlr.LayerSurfaceV1, event: zwlr.LayerSurfaceV1.Event, context: *Context) void {
+    switch (event) {
+        .configure => |configure| {
+            std.log.debug("Layer surface configured: {}x{}", .{configure.width, configure.height});
+            layer_surface.ackConfigure(configure.serial);
+
+            if (context.selection_surface == null) {
+                context.selection_surface = context.wl_compositor.?.createSurface() catch return;
+                context.selection_subsurface = context.wl_subcompositor.?.getSubsurface(
+                    context.selection_surface.?,
+                    context.wl_surface.?,
+                ) catch return;
+                context.selection_subsurface.?.setPosition(0, 0);
+                std.log.debug("Created subsurface at position (0, 0)", .{});
+                context.selection_subsurface.?.setDesync();
+                context.selection_subsurface.?.placeAbove(context.wl_surface.?);
+            }
+
+            draw(context) catch return;
+        },
+        .closed => {
+            if (context.selection_buffer) |buffer| {
+                buffer.destroy();
+            }
+            if (context.selection_fd >= 0) {
+                if (context.selection_data) |data| {
+                    const size = context.selection_buffer_width * context.selection_buffer_height * 4;
+                    _ = os.linux.munmap(@as([*]const u8, @ptrCast(data)), @intCast(size));
+                }
+                _ = os.linux.close(@intCast(context.selection_fd));
+            }
+            std.process.exit(0);
+        },
+    }
+}
+
 fn xdg_toplevel_listener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, _: *Context) void {
     switch (event) {
         .configure => {},
@@ -255,12 +325,18 @@ fn xdg_toplevel_listener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, _: *Contex
     }
 }
 
-fn seat_listener(seat: *wl.Seat, event: wl.Seat.Event, shutter: *Context) void {
+fn seat_listener(seat: *wl.Seat, event: wl.Seat.Event, context: *Context) void {
     switch (event) {
         .capabilities => |caps| {
             if (caps.capabilities.keyboard) {
-                shutter.wl_keyboard = seat.getKeyboard() catch return;
-                shutter.wl_keyboard.?.setListener(*Context, keyboard_listener, shutter);
+                context.wl_keyboard = seat.getKeyboard() catch return;
+                context.wl_keyboard.?.setListener(*Context, keyboard_listener, context);
+            }
+
+            if (caps.capabilities.pointer) {
+                context.wl_pointer = seat.getPointer() catch return;
+                context.wl_pointer.?.setListener(*Context, pointer_listener, context);
+                std.log.info("Pointer capability available", .{});
             }
         },
         .name => {},
@@ -273,6 +349,44 @@ fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, _: *Context) voi
             if (key.state == .pressed and key.key == 1) { // ESC key
                 std.debug.print("ESC pressed, closing window", .{});
                 std.process.exit(0);
+            }
+        },
+        else => {},
+    }
+}
+
+fn pointer_listener(_: *wl.Pointer, event: wl.Pointer.Event, context: *Context) void {
+    switch (event) {
+        .enter => |enter| {
+            context.pointer_x = enter.surface_x.toInt();
+            context.pointer_y = enter.surface_y.toInt();
+        },
+        .leave => {},
+        .motion => |motion| {
+            if (context.selection_active) {
+                context.selection_end_x = motion.surface_x.toInt();
+                context.selection_end_y = motion.surface_y.toInt();
+            }
+        },
+        .button => |button| {
+            if (button.button == 272) { // Left mouse button (BTN_LEFT)
+                if (button.state == .pressed) {
+                    std.log.debug("Mouse pressed at ({}, {})", .{ context.pointer_x, context.pointer_y });
+                    context.selection_active = true;
+                    context.selection_start_x = context.pointer_x; // Should capture current position
+                    context.selection_start_y = context.pointer_y;
+                    context.selection_end_x = context.pointer_x;
+                    context.selection_end_y = context.pointer_y;
+                } else if (button.state == .released) {
+                    std.log.debug("Mouse released ", .{});
+                    context.selection_active = false;
+                }
+            }
+        },
+        .axis => {},
+        .frame => {
+            if (context.selection_active) {
+                drawSelection(context) catch return;
             }
         },
         else => {},
@@ -461,4 +575,127 @@ fn getScreenshotURI(conn: ?*c.DBusConnection) ![*c]const u8 {
     }
 
     return error.DbusTimeout;
+}
+
+fn drawSelection(context: *Context) !void {
+    if (!context.selection_active) {
+        return;
+    }
+
+    const x1 = @min(context.selection_start_x, context.selection_end_x);
+    const y1 = @min(context.selection_start_y, context.selection_end_y);
+    const x2 = @max(context.selection_start_x, context.selection_end_x);
+    const y2 = @max(context.selection_start_y, context.selection_end_y);
+
+    const width = x2 - x1;
+    const height = y2 - y1;
+
+    std.log.debug("drawSelection called: pos=({},{}), size={}x{}, subsurface={any}", .{ x1, y1, width, height, context.selection_subsurface != null });
+
+    if (width <= 2 or height <= 2) {
+        std.log.debug("Too small, skipping\n", .{});
+        return;
+    }
+
+    context.selection_subsurface.?.setPosition(x1, y1);
+    const border_width: i32 = 2;
+    const stride = width * 4;
+    const size = stride * height;
+
+    // Check if we need to create a new buffer (size changed)
+    if (context.selection_buffer == null or
+        context.selection_buffer_width != width or
+        context.selection_buffer_height != height)
+    {
+
+        // Clean up old buffer if it exists
+        if (context.selection_buffer) |old_buffer| {
+            old_buffer.destroy();
+        }
+        if (context.selection_fd >= 0) {
+            if (context.selection_data) |data| {
+                const old_size = context.selection_buffer_width * context.selection_buffer_height * 4;
+                _ = os.linux.munmap(@as([*]const u8, @ptrCast(data)), @intCast(old_size));
+            }
+            _ = os.linux.close(@intCast(context.selection_fd));
+        }
+
+        // Create new buffer
+        const shm_name = "/selection-shm-XXXXXX";
+        context.selection_fd = @intCast(os.linux.memfd_create(shm_name, 0));
+        _ = os.linux.ftruncate(@intCast(context.selection_fd), size);
+
+        context.selection_data = @ptrFromInt(os.linux.mmap(
+            null,
+            @intCast(size),
+            os.linux.PROT.READ | os.linux.PROT.WRITE,
+            .{ .TYPE = .SHARED },
+            @intCast(context.selection_fd),
+            0,
+        ));
+
+        const pool = try context.wl_shm.?.createPool(@intCast(context.selection_fd), size);
+        context.selection_buffer = try pool.createBuffer(0, width, height, stride, .argb8888);
+        pool.destroy();
+
+        context.selection_buffer_width = width;
+        context.selection_buffer_height = height;
+    }
+
+    // Now just update the pixel data (reusing the buffer)
+    const byte_slice = @as([*]u8, @ptrCast(context.selection_data))[0..@intCast(size)];
+    const pixels = std.mem.bytesAsSlice(u32, byte_slice);
+
+    // Clear to transparent
+    @memset(byte_slice, 0);
+
+    // Draw borders (your existing border drawing code)
+    const border_color: u32 = 0xFFFFFFFF;
+
+    // Top border
+    var py: i32 = 0;
+    while (py < border_width) : (py += 1) {
+        var px: i32 = 0;
+        while (px < width) : (px += 1) {
+            pixels[@intCast(py * width + px)] = border_color;
+        }
+    }
+
+    // Bottom border
+    py = height - border_width;
+    while (py < height) : (py += 1) {
+        var px: i32 = 0;
+        while (px < width) : (px += 1) {
+            pixels[@intCast(py * width + px)] = border_color;
+        }
+    }
+
+    // Left border
+    py = 0;
+    while (py < height) : (py += 1) {
+        var px: i32 = 0;
+        while (px < border_width) : (px += 1) {
+            pixels[@intCast(py * width + px)] = border_color;
+        }
+    }
+
+    // Right border
+    py = 0;
+    while (py < height) : (py += 1) {
+        var px: i32 = width - border_width;
+        while (px < width) : (px += 1) {
+            pixels[@intCast(py * width + px)] = border_color;
+        }
+    }
+
+    context.selection_surface.?.attach(context.selection_buffer, 0, 0);
+    context.selection_surface.?.damage(0, 0, width, height);
+    context.selection_surface.?.commit();
+}
+
+fn clearSelection(context: *Context) void {
+    if (context.selection_surface) |surface| {
+        surface.attach(null, 0, 0);
+        surface.commit();
+    }
 }
