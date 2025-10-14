@@ -45,6 +45,8 @@ const Context = struct {
     width: i32 = 0,
     height: i32 = 0,
 
+    mouse_state: wl.Pointer.ButtonState = .released,
+
     layer_surface: ?*zwlr.LayerSurfaceV1 = null,
 };
 
@@ -133,6 +135,7 @@ pub fn main() !void {
 
     while (true) {
         _ = display.dispatch();
+        std.log.debug("Mouse state: {any}", .{context.mouse_state});
     }
 }
 
@@ -164,6 +167,18 @@ fn draw(context: *Context) !void {
     const image_bytes = @as([*]u8, @ptrCast(context.image))[0..@intCast(size)];
 
     @memcpy(byte_slice, image_bytes);
+
+    const pixels = std.mem.bytesAsSlice(u32, byte_slice);
+    const gray_overlay: u32 = 0x40000000;
+
+    for (pixels) |*pixel| {
+        const original = pixel.*;
+        const a = (gray_overlay >> 24) & 0xFF;
+        const r = ((original >> 16) & 0xFF) * (255 - a) / 255;
+        const g = ((original >> 8) & 0xFF) * (255 - a) / 255;
+        const b = (original & 0xFF) * (255 - a) / 255;
+        pixel.* = (0xFF << 24) | (r << 16) | (g << 8) | b;
+    }
 
     const pool = try context.wl_shm.?.createPool(@intCast(fd), size);
     const buffer = try pool.createBuffer(0, width, height, stride, .abgr8888);
@@ -325,25 +340,16 @@ fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, _: *Context) voi
     }
 }
 
-fn pointer_listener(_: *wl.Pointer, event: wl.Pointer.Event, _: *Context) void {
+fn pointer_listener(_: *wl.Pointer, event: wl.Pointer.Event, context: *Context) void {
     switch (event) {
-        .enter => |_| {
-        },
-        .leave => {
-            std.log.debug("Pointer LEFT our surface", .{});
-        },
-        .motion => |_| {
-        },
+        .enter => |_| {},
+        .leave => {},
+        .motion => |_| {},
         .button => |button| {
-            if (button.button == 272) { // Left mouse button (BTN_LEFT)
-                if (button.state == .pressed) {
-                } else if (button.state == .released) {
-                }
-            }
+            context.mouse_state = button.state;
         },
         .axis => {},
-        .frame => {
-        },
+        .frame => {},
         else => {},
     }
 }
@@ -532,11 +538,8 @@ fn getScreenshotURI(conn: ?*c.DBusConnection) ![*c]const u8 {
     return error.DbusTimeout;
 }
 
-fn drawSelection(_: *Context) !void {
-}
+fn drawSelection(_: *Context) !void {}
 
-fn clearSelection(_: *Context) void {
-}
+fn clearSelection(_: *Context) void {}
 
-fn selection_layer_surface_listener(_: *zwlr.LayerSurfaceV1, _: zwlr.LayerSurfaceV1.Event, _: *Context) void {
-}
+fn selection_layer_surface_listener(_: *zwlr.LayerSurfaceV1, _: zwlr.LayerSurfaceV1.Event, _: *Context) void {}
