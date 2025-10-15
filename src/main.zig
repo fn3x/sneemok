@@ -11,7 +11,6 @@ const c = @cImport({
 const wl = wayland.client.wl;
 const wl_server = wayland.server.wl;
 const zwlr = wayland.client.zwlr;
-const xdg = wayland.client.xdg;
 
 const mem = std.mem;
 const os = std.os;
@@ -20,7 +19,6 @@ const EventInterfaces = enum {
     wl_compositor,
     wl_output,
     wl_shm,
-    xdg_wm_base,
     wl_seat,
     zwlr_layer_shell_v1,
     wl_subcompositor,
@@ -33,10 +31,9 @@ const Context = struct {
     wl_output: ?*wl.Output = null,
     wl_pointer: ?*wl.Pointer = null,
     wl_subcompositor: ?*wl.Subcompositor = null,
+    wl_subsurface: ?*wl.Subsurface = null,
+    wl_subsurface_surface: ?*wl.Surface = null,
 
-    xdg_surface: ?*xdg.Surface = null,
-    xdg_toplevel: ?*xdg.Toplevel = null,
-    xdg_wm_base: ?*xdg.WmBase = null,
     wl_seat: ?*wl.Seat = null,
     wl_keyboard: ?*wl.Keyboard = null,
     zwlr_layer_shell: ?*zwlr.LayerShellV1 = null,
@@ -135,14 +132,14 @@ pub fn main() !void {
 
     while (true) {
         _ = display.dispatch();
-        std.log.debug("Mouse state: {any}", .{context.mouse_state});
+        std.log.debug("Pointer state: {any}", .{context.mouse_state});
     }
 }
 
 fn draw(context: *Context) !void {
     std.log.debug("Drawing main surface: {}x{}", .{ context.width, context.height });
 
-    const shm_name = "/wayland-shm-XXXXXX";
+    const shm_name = "/wayland-shm-main";
     const fd = os.linux.memfd_create(shm_name, 0);
     defer _ = os.linux.close(@intCast(fd));
 
@@ -165,20 +162,7 @@ fn draw(context: *Context) !void {
 
     const byte_slice = @as([*]u8, @ptrFromInt(data))[0..@intCast(size)];
     const image_bytes = @as([*]u8, @ptrCast(context.image))[0..@intCast(size)];
-
     @memcpy(byte_slice, image_bytes);
-
-    const pixels = std.mem.bytesAsSlice(u32, byte_slice);
-    const gray_overlay: u32 = 0x40000000;
-
-    for (pixels) |*pixel| {
-        const original = pixel.*;
-        const a = (gray_overlay >> 24) & 0xFF;
-        const r = ((original >> 16) & 0xFF) * (255 - a) / 255;
-        const g = ((original >> 8) & 0xFF) * (255 - a) / 255;
-        const b = (original & 0xFF) * (255 - a) / 255;
-        pixel.* = (0xFF << 24) | (r << 16) | (g << 8) | b;
-    }
 
     const pool = try context.wl_shm.?.createPool(@intCast(fd), size);
     const buffer = try pool.createBuffer(0, width, height, stride, .abgr8888);
@@ -190,6 +174,40 @@ fn draw(context: *Context) !void {
     context.wl_surface.?.attach(buffer, 0, 0);
     context.wl_surface.?.damage(0, 0, context.width, context.height);
     context.wl_surface.?.commit();
+}
+
+fn drawOverlay(context: *Context) !void {
+    std.log.debug("Drawing overlay surface: {}x{}", .{ context.width, context.height });
+
+    const fd = os.linux.memfd_create("/wayland-shm-overlay", 0);
+    defer _ = os.linux.close(@intCast(fd));
+
+    const size = context.width * context.height * 4;
+    _ = os.linux.ftruncate(@intCast(fd), size);
+
+    const data = os.linux.mmap(
+        null,
+        @intCast(size),
+        os.linux.PROT.READ | os.linux.PROT.WRITE,
+        .{ .TYPE = .SHARED },
+        @intCast(fd),
+        0,
+    );
+    defer _ = os.linux.munmap(@ptrFromInt(data), @intCast(size));
+
+    const pixels = std.mem.bytesAsSlice(u32, @as([*]u8, @ptrFromInt(data))[0..@intCast(size)]);
+
+    for (pixels) |*pixel| {
+        pixel.* = 0x40000000;
+    }
+
+    const pool = try context.wl_shm.?.createPool(@intCast(fd), size);
+    const buffer = try pool.createBuffer(0, context.width, context.height, context.width * 4, .argb8888);
+    pool.destroy();
+
+    context.wl_subsurface_surface.?.attach(buffer, 0, 0);
+    context.wl_subsurface_surface.?.damage(0, 0, context.width, context.height);
+    context.wl_subsurface_surface.?.commit();
 }
 
 fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, context: *Context) void {
@@ -238,15 +256,6 @@ fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, context: 
                     ) catch @panic("Failed to bind wl_subcompositor");
                     std.log.info("Got wl_subcompositor", .{});
                 },
-                .xdg_wm_base => {
-                    context.xdg_wm_base = registry.bind(
-                        global.name,
-                        xdg.WmBase,
-                        xdg.WmBase.generated_version,
-                    ) catch @panic("Failed to bind xdg_wm_base");
-                    context.xdg_wm_base.?.setListener(*Context, wm_base_listener, context);
-                    std.log.info("xdg_wm_base event", .{});
-                },
                 .zwlr_layer_shell_v1 => {
                     context.zwlr_layer_shell = registry.bind(
                         global.name,
@@ -269,23 +278,6 @@ fn wl_buffer_listener(buffer: *wl.Buffer, event: wl.Buffer.Event, _: *Context) v
     }
 }
 
-fn wm_base_listener(wm_base: *xdg.WmBase, event: xdg.WmBase.Event, _: *Context) void {
-    switch (event) {
-        .ping => |ping| {
-            wm_base.pong(ping.serial);
-        },
-    }
-}
-
-fn xdg_surface_listener(xdg_surface: *xdg.Surface, event: xdg.Surface.Event, context: *Context) void {
-    switch (event) {
-        .configure => |configure| {
-            xdg_surface.ackConfigure(configure.serial);
-            draw(context) catch return;
-        },
-    }
-}
-
 fn layer_surface_listener(layer_surface: *zwlr.LayerSurfaceV1, event: zwlr.LayerSurfaceV1.Event, context: *Context) void {
     switch (event) {
         .configure => |configure| {
@@ -293,17 +285,17 @@ fn layer_surface_listener(layer_surface: *zwlr.LayerSurfaceV1, event: zwlr.Layer
             layer_surface.ackConfigure(configure.serial);
 
             draw(context) catch return;
+
+            if (context.wl_subsurface == null) {
+                context.wl_subsurface_surface = context.wl_compositor.?.createSurface() catch return;
+                context.wl_subsurface = context.wl_subcompositor.?.getSubsurface(context.wl_subsurface_surface.?, context.wl_surface.?) catch return;
+                context.wl_subsurface.?.setPosition(0, 0);
+                context.wl_subsurface.?.setDesync();
+
+                drawOverlay(context) catch return;
+            }
         },
         .closed => {
-            std.process.exit(0);
-        },
-    }
-}
-
-fn xdg_toplevel_listener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, _: *Context) void {
-    switch (event) {
-        .configure => {},
-        .close => {
             std.process.exit(0);
         },
     }
@@ -537,9 +529,3 @@ fn getScreenshotURI(conn: ?*c.DBusConnection) ![*c]const u8 {
 
     return error.DbusTimeout;
 }
-
-fn drawSelection(_: *Context) !void {}
-
-fn clearSelection(_: *Context) void {}
-
-fn selection_layer_surface_listener(_: *zwlr.LayerSurfaceV1, _: zwlr.LayerSurfaceV1.Event, _: *Context) void {}
