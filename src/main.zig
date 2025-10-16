@@ -6,6 +6,7 @@ const c = @cImport({
     @cDefine("STBI_NO_SIMD", "1");
     @cInclude("stb_image.h");
     @cInclude("dbus/dbus.h");
+    @cInclude("cairo/cairo.h");
 });
 
 const wl = wayland.client.wl;
@@ -42,9 +43,32 @@ const Context = struct {
     width: i32 = 0,
     height: i32 = 0,
 
-    mouse_state: wl.Pointer.ButtonState = .released,
+    pointer_state: ?wl.Pointer.ButtonState = null,
+    region_start_x: i32 = 0,
+    region_start_y: i32 = 0,
+
+    region_end_x: i32 = 0,
+    region_end_y: i32 = 0,
+
+    region_last_x: i32 = 0,
+    region_last_y: i32 = 0,
 
     layer_surface: ?*zwlr.LayerSurfaceV1 = null,
+
+    buffer: ?*Buffer = null,
+};
+
+const Buffer = struct {
+    fd: i32,
+    data_ptr: [*]u8,
+    size: usize,
+    buffer: *wl.Buffer,
+
+    fn deinit(self: *Buffer) void {
+        self.buffer.destroy();
+        _ = os.linux.munmap(self.data_ptr, self.size);
+        _ = os.linux.close(self.fd);
+    }
 };
 
 pub fn main() !void {
@@ -101,6 +125,7 @@ pub fn main() !void {
     std.log.info("Wayland connection established", .{});
 
     context.wl_surface = try context.wl_compositor.?.createSurface();
+    context.wl_output.?.setListener(*Context, output_listener, &context);
 
     if (context.zwlr_layer_shell) |layer_shell| {
         const layer_surface = try layer_shell.getLayerSurface(
@@ -124,6 +149,10 @@ pub fn main() !void {
     context.wl_surface.?.setInputRegion(region);
     region.destroy();
 
+    var buffer = try initBuffer(&context);
+    context.buffer = &buffer;
+    defer context.buffer.?.deinit();
+
     context.wl_surface.?.commit();
 
     if (display.roundtrip() != .SUCCESS) {
@@ -132,7 +161,6 @@ pub fn main() !void {
 
     while (true) {
         _ = display.dispatch();
-        std.log.debug("Pointer state: {any}", .{context.mouse_state});
     }
 }
 
@@ -179,35 +207,84 @@ fn draw(context: *Context) !void {
 fn drawOverlay(context: *Context) !void {
     std.log.debug("Drawing overlay surface: {}x{}", .{ context.width, context.height });
 
-    const fd = os.linux.memfd_create("/wayland-shm-overlay", 0);
-    defer _ = os.linux.close(@intCast(fd));
+    const byte_slice = @as([*]u8, context.buffer.?.data_ptr)[0..context.buffer.?.size];
+    const image_bytes = @as([*]u8, @ptrCast(context.image))[0..context.buffer.?.size];
+    @memcpy(byte_slice, image_bytes);
 
-    const size = context.width * context.height * 4;
-    _ = os.linux.ftruncate(@intCast(fd), size);
-
-    const data = os.linux.mmap(
-        null,
-        @intCast(size),
-        os.linux.PROT.READ | os.linux.PROT.WRITE,
-        .{ .TYPE = .SHARED },
-        @intCast(fd),
-        0,
+    const surface = c.cairo_image_surface_create_for_data(
+        context.buffer.?.data_ptr,
+        c.CAIRO_FORMAT_ARGB32,
+        context.width,
+        context.height,
+        context.width * 4,
     );
-    defer _ = os.linux.munmap(@ptrFromInt(data), @intCast(size));
+    defer c.cairo_surface_destroy(surface);
 
-    const pixels = std.mem.bytesAsSlice(u32, @as([*]u8, @ptrFromInt(data))[0..@intCast(size)]);
+    const cr = c.cairo_create(surface);
+    defer c.cairo_destroy(cr);
 
-    for (pixels) |*pixel| {
-        pixel.* = 0x40000000;
-    }
+    c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.5);
+    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+    c.cairo_paint(cr);
 
-    const pool = try context.wl_shm.?.createPool(@intCast(fd), size);
-    const buffer = try pool.createBuffer(0, context.width, context.height, context.width * 4, .argb8888);
-    pool.destroy();
-
-    context.wl_subsurface_surface.?.attach(buffer, 0, 0);
+    context.wl_subsurface_surface.?.attach(context.buffer.?.buffer, 0, 0);
     context.wl_subsurface_surface.?.damage(0, 0, context.width, context.height);
     context.wl_subsurface_surface.?.commit();
+}
+
+fn drawRegion(context: *Context) !void {
+    const dx = context.region_end_x - context.region_start_x;
+    const dy = context.region_end_y - context.region_start_y;
+
+    const ddx = context.region_end_x - context.region_last_x;
+    const ddy = context.region_end_y - context.region_last_y;
+
+    if (@abs(dx) < 5 or @abs(dy) < 5 or @abs(ddx) < 10 or @abs(ddy) < 10) {
+        return;
+    }
+
+    std.log.info("Drawing: start({d},{d}) end({d},{d})", .{ context.region_start_x, context.region_start_y, context.region_end_x, context.region_end_y });
+
+    const surface = c.cairo_image_surface_create_for_data(
+        context.buffer.?.data_ptr,
+        c.CAIRO_FORMAT_ARGB32,
+        context.width,
+        context.height,
+        context.width * 4,
+    );
+    defer c.cairo_surface_destroy(surface);
+
+    const cr = c.cairo_create(surface);
+    defer c.cairo_destroy(cr);
+
+    c.cairo_save(cr);
+    c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.5);
+    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+    c.cairo_paint(cr);
+    c.cairo_restore(cr);
+
+    const x1 = @min(context.region_start_x, context.region_end_x);
+    const y1 = @min(context.region_start_y, context.region_end_y);
+    const w = @abs(dx);
+    const h = @abs(dy);
+
+    c.cairo_save(cr);
+    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_CLEAR);
+    c.cairo_rectangle(cr, @floatFromInt(x1), @floatFromInt(y1), @floatFromInt(w), @floatFromInt(h));
+    c.cairo_fill(cr);
+    c.cairo_restore(cr);
+
+    c.cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+    c.cairo_set_line_width(cr, 4.0);
+    c.cairo_rectangle(cr, @floatFromInt(x1), @floatFromInt(y1), @floatFromInt(w), @floatFromInt(h));
+    c.cairo_stroke(cr);
+
+    context.wl_subsurface_surface.?.attach(context.buffer.?.buffer, 0, 0);
+    context.wl_subsurface_surface.?.damage(0, 0, context.width, context.height);
+    context.wl_subsurface_surface.?.commit();
+
+    context.region_last_x = context.region_end_x;
+    context.region_last_y = context.region_end_y;
 }
 
 fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, context: *Context) void {
@@ -334,14 +411,41 @@ fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, _: *Context) voi
 
 fn pointer_listener(_: *wl.Pointer, event: wl.Pointer.Event, context: *Context) void {
     switch (event) {
-        .enter => |_| {},
-        .leave => {},
-        .motion => |_| {},
-        .button => |button| {
-            context.mouse_state = button.state;
+        .motion => |motion| {
+            if (context.pointer_state) |state| {
+                if (state == .pressed) {
+                    if (context.region_start_x == 0 and context.region_start_y == 0) {
+                        context.region_start_x = @intCast(motion.surface_x.toInt());
+                        context.region_start_y = @intCast(motion.surface_y.toInt());
+                    }
+
+                    context.region_end_x = @intCast(motion.surface_x.toInt());
+                    context.region_end_y = @intCast(motion.surface_y.toInt());
+
+                    drawRegion(context) catch return;
+                }
+            }
         },
-        .axis => {},
+        .button => |button| {
+            context.pointer_state = button.state;
+            if (button.state == .released) {
+                drawOverlay(context) catch return;
+                context.region_start_x = 0;
+                context.region_start_y = 0;
+                context.region_end_x = 0;
+                context.region_end_y = 0;
+                context.region_last_x = 0;
+                context.region_last_y = 0;
+            }
+        },
         .frame => {},
+        else => {},
+    }
+}
+
+fn output_listener(_: *wl.Output, event: wl.Output.Event, _: *Context) void {
+    switch (event) {
+        .done => {},
         else => {},
     }
 }
@@ -528,4 +632,33 @@ fn getScreenshotURI(conn: ?*c.DBusConnection) ![*c]const u8 {
     }
 
     return error.DbusTimeout;
+}
+
+fn initBuffer(context: *Context) !Buffer {
+    const fd = os.linux.memfd_create("/overlay", 0);
+
+    const size: i32 = context.width * context.height * 4;
+    _ = os.linux.ftruncate(@intCast(fd), size);
+
+    const data = os.linux.mmap(
+        null,
+        @intCast(size),
+        os.linux.PROT.READ | os.linux.PROT.WRITE,
+        .{ .TYPE = .SHARED },
+        @intCast(fd),
+        0,
+    );
+
+    const data_ptr: [*]u8 = @ptrFromInt(data);
+
+    const pool = try context.wl_shm.?.createPool(@intCast(fd), size);
+    defer pool.destroy();
+
+    const buffer = try pool.createBuffer(0, context.width, context.height, context.width * 4, .argb8888);
+    return .{
+        .data_ptr = data_ptr,
+        .fd = @intCast(fd),
+        .buffer = buffer,
+        .size = @intCast(size),
+    };
 }
