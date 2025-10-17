@@ -43,15 +43,22 @@ const Context = struct {
     width: i32 = 0,
     height: i32 = 0,
 
-    pointer_state: ?wl.Pointer.ButtonState = null,
-    region_start_x: i32 = 0,
-    region_start_y: i32 = 0,
+    pointer_x: i32 = 0,
+    pointer_y: i32 = 0,
 
-    region_end_x: i32 = 0,
-    region_end_y: i32 = 0,
+    selecting: bool = false,
+    anchor_x: i32 = 0,
+    anchor_y: i32 = 0,
 
-    region_last_x: i32 = 0,
-    region_last_y: i32 = 0,
+    has_last_selection: bool = false,
+    last_selection_x: i32 = 0,
+    last_selection_y: i32 = 0,
+    last_selection_width: i32 = 0,
+    last_selection_height: i32 = 0,
+
+    frame_callback: ?*wl.Callback = null,
+    dirty: bool = false,
+    configured: bool = false,
 
     layer_surface: ?*zwlr.LayerSurfaceV1 = null,
 
@@ -93,7 +100,6 @@ pub fn main() !void {
     var image_height: c_int = undefined;
     var channels: c_int = undefined;
 
-    // Strip "file://" prefix (7 characters)
     const uri_str = std.mem.span(uri);
     const file_path = uri_str[7..];
 
@@ -204,8 +210,26 @@ fn draw(context: *Context) !void {
     context.wl_surface.?.commit();
 }
 
-fn drawOverlay(context: *Context) !void {
-    std.log.debug("Drawing overlay surface: {}x{}", .{ context.width, context.height });
+fn sendFrame(context: *Context) void {
+    if (!context.configured) {
+        return;
+    }
+
+    renderOverlay(context) catch return;
+
+    if (context.selecting) {
+        context.frame_callback = context.wl_subsurface_surface.?.frame() catch return;
+        context.frame_callback.?.setListener(*Context, frameListener, context);
+    }
+
+    context.wl_subsurface_surface.?.attach(context.buffer.?.buffer, 0, 0);
+    context.wl_subsurface_surface.?.damage(0, 0, context.width, context.height);
+    context.wl_subsurface_surface.?.commit();
+    context.dirty = false;
+}
+
+fn renderOverlay(context: *Context) !void {
+    std.log.info("rendering overlay", .{}); // need to keep this for compiler not to optimize this function away?
 
     const byte_slice = @as([*]u8, context.buffer.?.data_ptr)[0..context.buffer.?.size];
     const image_bytes = @as([*]u8, @ptrCast(context.image))[0..context.buffer.?.size];
@@ -223,68 +247,71 @@ fn drawOverlay(context: *Context) !void {
     const cr = c.cairo_create(surface);
     defer c.cairo_destroy(cr);
 
-    c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.5);
     c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.25);
     c.cairo_paint(cr);
 
-    context.wl_subsurface_surface.?.attach(context.buffer.?.buffer, 0, 0);
-    context.wl_subsurface_surface.?.damage(0, 0, context.width, context.height);
-    context.wl_subsurface_surface.?.commit();
+    if (context.selecting) {
+        const x = @min(context.anchor_x, context.pointer_x);
+        const y = @min(context.anchor_y, context.pointer_y);
+        const w = @abs(context.pointer_x - context.anchor_x) + 1;
+        const h = @abs(context.pointer_y - context.anchor_y) + 1;
+
+        if (w > 1 and h > 1) {
+            c.cairo_save(cr);
+            c.cairo_set_operator(cr, c.CAIRO_OPERATOR_CLEAR);
+            c.cairo_rectangle(cr, @floatFromInt(x), @floatFromInt(y), @floatFromInt(w), @floatFromInt(h));
+            c.cairo_fill(cr);
+            c.cairo_restore(cr);
+
+            c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 1.0);
+            c.cairo_set_line_width(cr, 2.0);
+            c.cairo_rectangle(cr, @floatFromInt(x), @floatFromInt(y), @floatFromInt(w), @floatFromInt(h));
+            c.cairo_stroke(cr);
+        }
+    } else if (context.has_last_selection) {
+        const x = context.last_selection_x;
+        const y = context.last_selection_y;
+        const w = context.last_selection_width;
+        const h = context.last_selection_height;
+
+        if (w > 1 and h > 1) {
+            c.cairo_save(cr);
+            c.cairo_set_operator(cr, c.CAIRO_OPERATOR_CLEAR);
+            c.cairo_rectangle(cr, @floatFromInt(x), @floatFromInt(y), @floatFromInt(w), @floatFromInt(h));
+            c.cairo_fill(cr);
+            c.cairo_restore(cr);
+
+            c.cairo_set_source_rgba(cr, 0.0, 1.0, 0.0, 1.0);
+            c.cairo_set_line_width(cr, 3.0);
+            c.cairo_rectangle(cr, @floatFromInt(x), @floatFromInt(y), @floatFromInt(w), @floatFromInt(h));
+            c.cairo_stroke(cr);
+        }
+    }
 }
 
-fn drawRegion(context: *Context) !void {
-    const dx = context.region_end_x - context.region_start_x;
-    const dy = context.region_end_y - context.region_start_y;
-
-    const ddx = context.region_end_x - context.region_last_x;
-    const ddy = context.region_end_y - context.region_last_y;
-
-    if (@abs(dx) < 5 or @abs(dy) < 5 or @abs(ddx) < 10 or @abs(ddy) < 10) {
+fn setDirty(context: *Context) void {
+    context.dirty = true;
+    if (context.frame_callback != null) {
         return;
     }
 
-    std.log.info("Drawing: start({d},{d}) end({d},{d})", .{ context.region_start_x, context.region_start_y, context.region_end_x, context.region_end_y });
-
-    const surface = c.cairo_image_surface_create_for_data(
-        context.buffer.?.data_ptr,
-        c.CAIRO_FORMAT_ARGB32,
-        context.width,
-        context.height,
-        context.width * 4,
-    );
-    defer c.cairo_surface_destroy(surface);
-
-    const cr = c.cairo_create(surface);
-    defer c.cairo_destroy(cr);
-
-    c.cairo_save(cr);
-    c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.5);
-    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
-    c.cairo_paint(cr);
-    c.cairo_restore(cr);
-
-    const x1 = @min(context.region_start_x, context.region_end_x);
-    const y1 = @min(context.region_start_y, context.region_end_y);
-    const w = @abs(dx);
-    const h = @abs(dy);
-
-    c.cairo_save(cr);
-    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_CLEAR);
-    c.cairo_rectangle(cr, @floatFromInt(x1), @floatFromInt(y1), @floatFromInt(w), @floatFromInt(h));
-    c.cairo_fill(cr);
-    c.cairo_restore(cr);
-
-    c.cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
-    c.cairo_set_line_width(cr, 4.0);
-    c.cairo_rectangle(cr, @floatFromInt(x1), @floatFromInt(y1), @floatFromInt(w), @floatFromInt(h));
-    c.cairo_stroke(cr);
-
-    context.wl_subsurface_surface.?.attach(context.buffer.?.buffer, 0, 0);
-    context.wl_subsurface_surface.?.damage(0, 0, context.width, context.height);
+    context.frame_callback = context.wl_subsurface_surface.?.frame() catch return;
+    context.frame_callback.?.setListener(*Context, frameListener, context);
     context.wl_subsurface_surface.?.commit();
+}
 
-    context.region_last_x = context.region_end_x;
-    context.region_last_y = context.region_end_y;
+fn frameListener(callback: *wl.Callback, event: wl.Callback.Event, context: *Context) void {
+    switch (event) {
+        .done => {
+            callback.destroy();
+            context.frame_callback = null;
+
+            if (context.dirty) {
+                sendFrame(context);
+            }
+        },
+    }
 }
 
 fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, context: *Context) void {
@@ -361,6 +388,8 @@ fn layer_surface_listener(layer_surface: *zwlr.LayerSurfaceV1, event: zwlr.Layer
             std.log.debug("Layer surface configured: {}x{}", .{ configure.width, configure.height });
             layer_surface.ackConfigure(configure.serial);
 
+            context.configured = true;
+
             draw(context) catch return;
 
             if (context.wl_subsurface == null) {
@@ -369,7 +398,8 @@ fn layer_surface_listener(layer_surface: *zwlr.LayerSurfaceV1, event: zwlr.Layer
                 context.wl_subsurface.?.setPosition(0, 0);
                 context.wl_subsurface.?.setDesync();
 
-                drawOverlay(context) catch return;
+                context.dirty = true;
+                sendFrame(context);
             }
         },
         .closed => {
@@ -397,12 +427,24 @@ fn seat_listener(seat: *wl.Seat, event: wl.Seat.Event, context: *Context) void {
     }
 }
 
-fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, _: *Context) void {
+fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, context: *Context) void {
     switch (event) {
         .key => |key| {
-            if (key.state == .pressed and key.key == 1) { // ESC key
-                std.debug.print("ESC pressed, closing window", .{});
-                std.process.exit(0);
+            if (key.state == .pressed) {
+                if (key.key == 1) { // ESC key
+                    std.debug.print("ESC pressed, exiting\n", .{});
+                    std.process.exit(0);
+                } else if (key.key == 28) { // ENTER key
+                    if (context.has_last_selection) {
+                        std.debug.print("{d},{d} {d}x{d}\n", .{
+                            context.last_selection_x,
+                            context.last_selection_y,
+                            context.last_selection_width,
+                            context.last_selection_height,
+                        });
+                        std.process.exit(0);
+                    }
+                }
             }
         },
         else => {},
@@ -412,30 +454,41 @@ fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, _: *Context) voi
 fn pointer_listener(_: *wl.Pointer, event: wl.Pointer.Event, context: *Context) void {
     switch (event) {
         .motion => |motion| {
-            if (context.pointer_state) |state| {
-                if (state == .pressed) {
-                    if (context.region_start_x == 0 and context.region_start_y == 0) {
-                        context.region_start_x = @intCast(motion.surface_x.toInt());
-                        context.region_start_y = @intCast(motion.surface_y.toInt());
-                    }
+            context.pointer_x = @intCast(motion.surface_x.toInt());
+            context.pointer_y = @intCast(motion.surface_y.toInt());
 
-                    context.region_end_x = @intCast(motion.surface_x.toInt());
-                    context.region_end_y = @intCast(motion.surface_y.toInt());
-
-                    drawRegion(context) catch return;
-                }
+            if (context.selecting) {
+                setDirty(context);
             }
         },
         .button => |button| {
-            context.pointer_state = button.state;
-            if (button.state == .released) {
-                drawOverlay(context) catch return;
-                context.region_start_x = 0;
-                context.region_start_y = 0;
-                context.region_end_x = 0;
-                context.region_end_y = 0;
-                context.region_last_x = 0;
-                context.region_last_y = 0;
+            if (button.button == 0x110) { // BTN_LEFT
+                if (button.state == .pressed) {
+                    context.selecting = true;
+                    context.anchor_x = context.pointer_x;
+                    context.anchor_y = context.pointer_y;
+                    std.log.debug("Started selection at: {d},{d}", .{ context.anchor_x, context.anchor_y });
+                    setDirty(context);
+                } else if (button.state == .released and context.selecting) {
+                    context.selecting = false;
+
+                    const x = @min(context.anchor_x, context.pointer_x);
+                    const y = @min(context.anchor_y, context.pointer_y);
+                    const w = @abs(context.pointer_x - context.anchor_x) + 1;
+                    const h = @abs(context.pointer_y - context.anchor_y) + 1;
+
+                    if (w > 1 and h > 1) {
+                        context.has_last_selection = true;
+                        context.last_selection_x = x;
+                        context.last_selection_y = y;
+                        context.last_selection_width = @intCast(w);
+                        context.last_selection_height = @intCast(h);
+
+                        std.log.info("Selection saved: {d},{d} {d}x{d} (Press ENTER to confirm or draw again)", .{ x, y, w, h });
+
+                        setDirty(context);
+                    }
+                }
             }
         },
         .frame => {},
