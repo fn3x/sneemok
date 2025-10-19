@@ -3,7 +3,6 @@ const wayland = @import("wayland");
 const c = @import("c.zig").c;
 
 const wl = wayland.client.wl;
-
 const os = std.os;
 
 pub const PoolBuffer = struct {
@@ -40,7 +39,7 @@ pub const PoolBuffer = struct {
 
         const pool = try shm.createPool(@intCast(fd), @intCast(size));
         self.buffer = try pool.createBuffer(0, width, height, @intCast(stride), wl_fmt);
-        self.buffer.?.setListener(*PoolBuffer, bufferHandleRelease, self);
+        self.buffer.?.setListener(*Self, bufferHandleRelease, self);
         pool.destroy();
 
         self.data = @ptrFromInt(data);
@@ -74,10 +73,11 @@ pub const PoolBuffer = struct {
         self.* = .{};
     }
 
-    pub fn bufferHandleRelease(_: *wl.Buffer, _: wl.Buffer.Event, buffer: *PoolBuffer) void {
-        buffer.busy = false;
-    }
 };
+
+fn bufferHandleRelease(_: *wl.Buffer, _: wl.Buffer.Event, buffer: *PoolBuffer) void {
+    buffer.busy = false;
+}
 
 pub fn getNextBuffer(shm: *wl.Shm, pool: []PoolBuffer, width: i32, height: i32) ?*PoolBuffer {
     var buffer: ?*PoolBuffer = null;
