@@ -1,7 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("dbus/dbus.h");
-});
+const c = @import("c.zig").c;
 
 pub const DBus = struct {
     conn: *c.struct_DBusConnection,
