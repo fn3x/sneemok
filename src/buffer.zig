@@ -78,3 +78,26 @@ pub const PoolBuffer = struct {
         buffer.busy = false;
     }
 };
+
+pub fn getNextBuffer(shm: *wl.Shm, pool: []PoolBuffer, width: i32, height: i32) ?*PoolBuffer {
+    var buffer: ?*PoolBuffer = null;
+    for (pool) |*b| {
+        if (b.busy) {
+            continue;
+        }
+        buffer = b;
+        break;
+    }
+    if (buffer == null) {
+        return null;
+    }
+
+    if (buffer.?.width != width or buffer.?.height != height) {
+        buffer.?.finishBuffer();
+    }
+
+    if (buffer.?.buffer == null) {
+        buffer.?.createBuffer(shm, width, height) catch return null;
+    }
+    return buffer;
+}

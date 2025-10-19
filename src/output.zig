@@ -2,7 +2,7 @@ const std = @import("std");
 const wayland = @import("wayland");
 const c = @import("c.zig").c;
 const DBus = @import("dbus.zig").DBus;
-const PoolBuffer = @import("buffer.zig").PoolBuffer;
+const Buffer = @import("buffer.zig");
 const State = @import("main.zig").State;
 
 const wl = wayland.client.wl;
@@ -31,8 +31,8 @@ pub const Output = struct {
     dirty: bool = false,
     width: i32 = 0,
     height: i32 = 0,
-    buffers: [2]PoolBuffer = [_]PoolBuffer{.{}} ** 2,
-    current_buffer: ?*PoolBuffer = null,
+    buffers: [2]Buffer.PoolBuffer = [_]Buffer.PoolBuffer{.{}} ** 2,
+    current_buffer: ?*Buffer.PoolBuffer = null,
 
     const Self = @This();
 
@@ -169,7 +169,7 @@ pub const Output = struct {
         const buffer_width = self.width * self.scale;
         const buffer_height = self.height * self.scale;
 
-        self.current_buffer = getNextBuffer(
+        self.current_buffer = Buffer.getNextBuffer(
             state.wl_shm.?,
             &self.buffers,
             buffer_width,
@@ -207,27 +207,4 @@ fn frameListener(callback: *wl.Callback, event: wl.Callback.Event, output: *Outp
             }
         },
     }
-}
-
-fn getNextBuffer(shm: *wl.Shm, pool: []PoolBuffer, width: i32, height: i32) ?*PoolBuffer {
-    var buffer: ?*PoolBuffer = null;
-    for (pool) |*b| {
-        if (b.busy) {
-            continue;
-        }
-        buffer = b;
-        break;
-    }
-    if (buffer == null) {
-        return null;
-    }
-
-    if (buffer.?.width != width or buffer.?.height != height) {
-        buffer.?.finishBuffer();
-    }
-
-    if (buffer.?.buffer == null) {
-        buffer.?.createBuffer(shm, width, height) catch return null;
-    }
-    return buffer;
 }
