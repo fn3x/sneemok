@@ -298,7 +298,7 @@ fn renderOutput(output: *Output) void {
     }
 
     c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
-    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.25);
+    c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.50);
     c.cairo_paint(cr);
 
     if (state.selecting) {
@@ -330,7 +330,7 @@ fn renderOutput(output: *Output) void {
             c.cairo_fill(cr);
             c.cairo_restore(cr);
 
-            c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 1.0);
+            c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.5);
             c.cairo_set_line_width(cr, 2.0);
             c.cairo_rectangle(cr, @floatFromInt(local_x), @floatFromInt(local_y), @floatFromInt(sel_w), @floatFromInt(sel_h));
             c.cairo_stroke(cr);
@@ -362,7 +362,7 @@ fn renderOutput(output: *Output) void {
             c.cairo_restore(cr);
 
             c.cairo_set_source_rgba(cr, 0.0, 1.0, 0.0, 1.0);
-            c.cairo_set_line_width(cr, 3.0);
+            c.cairo_set_line_width(cr, 1.0);
             c.cairo_rectangle(cr, @floatFromInt(local_x), @floatFromInt(local_y), @floatFromInt(sel_w), @floatFromInt(sel_h));
             c.cairo_stroke(cr);
         }
