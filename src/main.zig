@@ -5,12 +5,11 @@ const c = @cImport({
     @cDefine("STBI_ONLY_PNG", "1");
     @cDefine("STBI_NO_SIMD", "1");
     @cInclude("stb_image.h");
-    @cInclude("dbus/dbus.h");
     @cInclude("cairo/cairo.h");
 });
+const DBus = @import("dbus.zig").DBus;
 
 const wl = wayland.client.wl;
-const wl_server = wayland.server.wl;
 const zwlr = wayland.client.zwlr;
 
 const mem = std.mem;
@@ -22,30 +21,62 @@ const EventInterfaces = enum {
     wl_shm,
     wl_seat,
     zwlr_layer_shell_v1,
-    wl_subcompositor,
 };
 
-const Context = struct {
-    wl_compositor: ?*wl.Compositor = null,
-    wl_shm: ?*wl.Shm = null,
-    wl_surface: ?*wl.Surface = null,
-    wl_output: ?*wl.Output = null,
-    wl_pointer: ?*wl.Pointer = null,
-    wl_subcompositor: ?*wl.Subcompositor = null,
-    wl_subsurface: ?*wl.Subsurface = null,
-    wl_subsurface_surface: ?*wl.Surface = null,
+const PoolBuffer = struct {
+    buffer: ?*wl.Buffer = null,
+    surface: ?*c.cairo_surface_t = null,
+    cairo: ?*c.cairo_t = null,
+    width: u32 = 0,
+    height: u32 = 0,
+    data: ?*anyopaque = null,
+    size: usize = 0,
+    busy: bool = false,
+};
 
-    wl_seat: ?*wl.Seat = null,
-    wl_keyboard: ?*wl.Keyboard = null,
-    zwlr_layer_shell: ?*zwlr.LayerShellV1 = null,
+const Output = struct {
+    wl_output: ?*wl.Output,
+    state: ?*State,
 
-    image: ?[*c]u8 = null,
+    scale: i32 = 1,
+    geometry: struct {
+        x: i32 = 0,
+        y: i32 = 0,
+        width: i32 = 0,
+        height: i32 = 0,
+    } = .{},
+
+    surface: ?*wl.Surface = null,
+    layer_surface: ?*zwlr.LayerSurfaceV1 = null,
+
+    frame_callback: ?*wl.Callback = null,
+    configured: bool = false,
+    dirty: bool = false,
     width: i32 = 0,
     height: i32 = 0,
+    buffers: [2]PoolBuffer = [_]PoolBuffer{.{}} ** 2,
+    current_buffer: ?*PoolBuffer = null,
+};
+
+const State = struct {
+    allocator: std.mem.Allocator,
+    display: ?*wl.Display = null,
+    registry: ?*wl.Registry = null,
+    wl_compositor: ?*wl.Compositor = null,
+    wl_shm: ?*wl.Shm = null,
+    wl_seat: ?*wl.Seat = null,
+    wl_keyboard: ?*wl.Keyboard = null,
+    wl_pointer: ?*wl.Pointer = null,
+    zwlr_layer_shell: ?*zwlr.LayerShellV1 = null,
+
+    outputs: std.ArrayList(*Output),
+
+    image: ?[*c]u8 = null,
+    image_width: i32 = 0,
+    image_height: i32 = 0,
 
     pointer_x: i32 = 0,
     pointer_y: i32 = 0,
-
     selecting: bool = false,
     anchor_x: i32 = 0,
     anchor_y: i32 = 0,
@@ -55,46 +86,24 @@ const Context = struct {
     last_selection_y: i32 = 0,
     last_selection_width: i32 = 0,
     last_selection_height: i32 = 0,
-
-    frame_callback: ?*wl.Callback = null,
-    dirty: bool = false,
-    configured: bool = false,
-
-    layer_surface: ?*zwlr.LayerSurfaceV1 = null,
-
-    buffer: ?*Buffer = null,
-};
-
-const Buffer = struct {
-    fd: i32,
-    data_ptr: [*]u8,
-    size: usize,
-    buffer: *wl.Buffer,
-
-    fn deinit(self: *Buffer) void {
-        self.buffer.destroy();
-        _ = os.linux.munmap(self.data_ptr, self.size);
-        _ = os.linux.close(self.fd);
-    }
 };
 
 pub fn main() !void {
-    const conn = c.dbus_bus_get(c.DBUS_BUS_SESSION, null);
-    if (conn == null) {
-        std.debug.print("Failed to connect to D-Bus\n", .{});
-        return error.DBusConnectionNull;
-    }
-    defer c.dbus_connection_unref(conn);
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    const available = try checkScreenshotPortal(conn);
-    if (!available) {
-        return error.ScreenshotPortalNotAvailable;
-    }
+    var dbus: DBus = try .init();
+    defer dbus.deinit();
 
-    const uri = try getScreenshotURI(conn);
+    const uri = try dbus.getScreenshotURI();
     std.log.info("uri: {s}", .{uri});
 
-    var context: Context = .{};
+    var state = State{
+        .allocator = allocator,
+        .outputs = std.ArrayList(*Output).empty,
+    };
+    defer state.outputs.deinit(allocator);
 
     var image_width: c_int = undefined;
     var image_height: c_int = undefined;
@@ -106,23 +115,34 @@ pub fn main() !void {
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const path_z = try std.fmt.bufPrintZ(&path_buf, "{s}", .{file_path});
 
-    context.image = c.stbi_load(path_z.ptr, &image_width, &image_height, &channels, 4);
-    if (context.image == null) {
+    state.image = c.stbi_load(path_z.ptr, &image_width, &image_height, &channels, 4);
+    if (state.image == null) {
         return error.ImageLoadFailed;
     }
 
     std.debug.print("Loaded screenshot: {}x{}\n", .{ image_width, image_height });
 
-    context.width = @intCast(image_width);
-    context.height = @intCast(image_height);
+    state.image_width = @intCast(image_width);
+    state.image_height = @intCast(image_height);
+
+    const pixel_count: usize = @intCast(image_width * image_height);
+    const img_bytes: [*]u8 = @ptrCast(state.image);
+    for (0..pixel_count) |i| {
+        const idx = i * 4;
+        const temp = img_bytes[idx];
+        img_bytes[idx] = img_bytes[idx + 2];
+        img_bytes[idx + 2] = temp;
+    }
 
     var display = try wl.Display.connect(null);
     defer display.disconnect();
 
+    state.display = display;
+
     const registry = try display.getRegistry();
     defer registry.destroy();
 
-    registry.setListener(*Context, registry_listener, &context);
+    registry.setListener(*State, registryListener, &state);
 
     if (display.roundtrip() != .SUCCESS) {
         return error.RoundTripFailed;
@@ -130,36 +150,24 @@ pub fn main() !void {
 
     std.log.info("Wayland connection established", .{});
 
-    context.wl_surface = try context.wl_compositor.?.createSurface();
-    context.wl_output.?.setListener(*Context, output_listener, &context);
+    for (state.outputs.items) |output| {
+        output.surface = try state.wl_compositor.?.createSurface();
 
-    if (context.zwlr_layer_shell) |layer_shell| {
-        const layer_surface = try layer_shell.getLayerSurface(
-            context.wl_surface.?,
-            null,
+        output.layer_surface = try state.zwlr_layer_shell.?.getLayerSurface(
+            output.surface.?,
+            output.wl_output,
             .overlay,
             "screenshot-tool",
         );
 
-        layer_surface.setListener(*Context, layer_surface_listener, &context);
-        layer_surface.setSize(0, 0);
-        layer_surface.setAnchor(.{ .top = true, .bottom = true, .left = true, .right = true });
-        layer_surface.setKeyboardInteractivity(.exclusive);
-        layer_surface.setExclusiveZone(-1);
+        output.layer_surface.?.setListener(*Output, layerSurfaceListener, output);
+        output.layer_surface.?.setSize(0, 0);
+        output.layer_surface.?.setAnchor(.{ .top = true, .bottom = true, .left = true, .right = true });
+        output.layer_surface.?.setKeyboardInteractivity(.exclusive);
+        output.layer_surface.?.setExclusiveZone(-1);
 
-        context.layer_surface = layer_surface;
+        output.surface.?.commit();
     }
-
-    const region = context.wl_compositor.?.createRegion() catch return;
-    region.add(0, 0, context.width, context.height);
-    context.wl_surface.?.setInputRegion(region);
-    region.destroy();
-
-    var buffer = try initBuffer(&context);
-    context.buffer = &buffer;
-    defer context.buffer.?.deinit();
-
-    context.wl_surface.?.commit();
 
     if (display.roundtrip() != .SUCCESS) {
         return error.RoundTripFailed;
@@ -170,203 +178,316 @@ pub fn main() !void {
     }
 }
 
-fn draw(context: *Context) !void {
-    std.log.debug("Drawing main surface: {}x{}", .{ context.width, context.height });
+fn bufferHandleRelease(_: *wl.Buffer, _: wl.Buffer.Event, buffer: *PoolBuffer) void {
+    buffer.busy = false;
+}
 
-    const shm_name = "/wayland-shm-main";
-    const fd = os.linux.memfd_create(shm_name, 0);
+fn createBuffer(shm: *wl.Shm, buf: *PoolBuffer, width: i32, height: i32) !void {
+    const wl_fmt = wl.Shm.Format.argb8888;
+    const cairo_fmt = c.CAIRO_FORMAT_ARGB32;
+    const stride: u32 = @intCast(c.cairo_format_stride_for_width(cairo_fmt, width));
+    const size: usize = stride * @as(usize, @intCast(height));
+
+    const fd = os.linux.memfd_create("/overlay", 0);
     defer _ = os.linux.close(@intCast(fd));
 
-    const width = context.width;
-    const height = context.height;
-    const stride = width * 4;
-    const size = stride * height;
-
-    _ = os.linux.ftruncate(@intCast(fd), size);
+    _ = os.linux.ftruncate(@intCast(fd), @intCast(size));
 
     const data = os.linux.mmap(
         null,
-        @intCast(size),
+        size,
         os.linux.PROT.READ | os.linux.PROT.WRITE,
         .{ .TYPE = .SHARED },
         @intCast(fd),
         0,
     );
-    defer _ = os.linux.munmap(@ptrFromInt(data), @intCast(size));
 
-    const byte_slice = @as([*]u8, @ptrFromInt(data))[0..@intCast(size)];
-    const image_bytes = @as([*]u8, @ptrCast(context.image))[0..@intCast(size)];
-    @memcpy(byte_slice, image_bytes);
-
-    const pool = try context.wl_shm.?.createPool(@intCast(fd), size);
-    const buffer = try pool.createBuffer(0, width, height, stride, .abgr8888);
-
+    const pool = try shm.createPool(@intCast(fd), @intCast(size));
+    buf.buffer = try pool.createBuffer(0, width, height, @intCast(stride), wl_fmt);
+    buf.buffer.?.setListener(*PoolBuffer, bufferHandleRelease, buf);
     pool.destroy();
 
-    buffer.setListener(*Context, wl_buffer_listener, context);
-
-    context.wl_surface.?.attach(buffer, 0, 0);
-    context.wl_surface.?.damage(0, 0, context.width, context.height);
-    context.wl_surface.?.commit();
-}
-
-fn sendFrame(context: *Context) void {
-    if (!context.configured) {
-        return;
-    }
-
-    renderOverlay(context) catch return;
-
-    if (context.selecting) {
-        context.frame_callback = context.wl_subsurface_surface.?.frame() catch return;
-        context.frame_callback.?.setListener(*Context, frameListener, context);
-    }
-
-    context.wl_subsurface_surface.?.attach(context.buffer.?.buffer, 0, 0);
-    context.wl_subsurface_surface.?.damage(0, 0, context.width, context.height);
-    context.wl_subsurface_surface.?.commit();
-    context.dirty = false;
-}
-
-fn renderOverlay(context: *Context) !void {
-    std.log.info("rendering overlay", .{}); // need to keep this for compiler not to optimize this function away?
-
-    const byte_slice = @as([*]u8, context.buffer.?.data_ptr)[0..context.buffer.?.size];
-    const image_bytes = @as([*]u8, @ptrCast(context.image))[0..context.buffer.?.size];
-    @memcpy(byte_slice, image_bytes);
-
-    const surface = c.cairo_image_surface_create_for_data(
-        context.buffer.?.data_ptr,
-        c.CAIRO_FORMAT_ARGB32,
-        context.width,
-        context.height,
-        context.width * 4,
+    buf.data = @ptrFromInt(data);
+    buf.size = size;
+    buf.width = @intCast(width);
+    buf.height = @intCast(height);
+    buf.surface = c.cairo_image_surface_create_for_data(
+        @ptrCast(buf.data),
+        cairo_fmt,
+        width,
+        height,
+        @intCast(stride),
     );
-    defer c.cairo_surface_destroy(surface);
+    buf.cairo = c.cairo_create(buf.surface);
+}
 
-    const cr = c.cairo_create(surface);
-    defer c.cairo_destroy(cr);
+fn finishBuffer(buffer: *PoolBuffer) void {
+    if (buffer.buffer) |b| {
+        b.destroy();
+    }
+    if (buffer.cairo) |cr| {
+        c.cairo_destroy(cr);
+    }
+    if (buffer.surface) |s| {
+        c.cairo_surface_destroy(s);
+    }
+    if (buffer.data) |data| {
+        const aligned_data: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(data));
+        _ = os.linux.munmap(aligned_data, buffer.size);
+    }
+    buffer.* = .{};
+}
 
-    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+fn getNextBuffer(shm: *wl.Shm, pool: []PoolBuffer, width: i32, height: i32) ?*PoolBuffer {
+    var buffer: ?*PoolBuffer = null;
+    for (pool) |*b| {
+        if (b.busy) {
+            continue;
+        }
+        buffer = b;
+        break;
+    }
+    if (buffer == null) {
+        return null;
+    }
+
+    if (buffer.?.width != width or buffer.?.height != height) {
+        finishBuffer(buffer.?);
+    }
+
+    if (buffer.?.buffer == null) {
+        createBuffer(shm, buffer.?, width, height) catch return null;
+    }
+    return buffer;
+}
+
+fn renderOutput(output: *Output) void {
+    const state = output.state.?;
+    const buffer = output.current_buffer orelse return;
+    const cr = buffer.cairo orelse return;
+
+    c.cairo_identity_matrix(cr);
+    c.cairo_scale(cr, @floatFromInt(output.scale), @floatFromInt(output.scale));
+
+    const img_x = output.geometry.x;
+    const img_y = output.geometry.y;
+    const img_w = output.geometry.width;
+    const img_h = output.geometry.height;
+
+    if (img_x < state.image_width and img_y < state.image_height) {
+        const src_x = @max(0, img_x);
+        const src_y = @max(0, img_y);
+        const src_w = @min(state.image_width - src_x, img_w);
+        const src_h = @min(state.image_height - src_y, img_h);
+
+        if (src_w > 0 and src_h > 0) {
+            const img_surface = c.cairo_image_surface_create_for_data(
+                @ptrCast(state.image),
+                c.CAIRO_FORMAT_ARGB32,
+                state.image_width,
+                state.image_height,
+                state.image_width * 4,
+            );
+            defer c.cairo_surface_destroy(img_surface);
+
+            c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+            c.cairo_set_source_surface(cr, img_surface, @floatFromInt(-img_x), @floatFromInt(-img_y));
+            c.cairo_rectangle(cr, 0, 0, @floatFromInt(src_w), @floatFromInt(src_h));
+            c.cairo_fill(cr);
+        }
+    }
+
+    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
     c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.25);
     c.cairo_paint(cr);
 
-    if (context.selecting) {
-        const x = @min(context.anchor_x, context.pointer_x);
-        const y = @min(context.anchor_y, context.pointer_y);
-        const w = @abs(context.pointer_x - context.anchor_x) + 1;
-        const h = @abs(context.pointer_y - context.anchor_y) + 1;
+    if (state.selecting) {
+        const sel_x = @min(state.anchor_x, state.pointer_x);
+        const sel_y = @min(state.anchor_y, state.pointer_y);
+        const sel_w = @abs(state.pointer_x - state.anchor_x) + 1;
+        const sel_h = @abs(state.pointer_y - state.anchor_y) + 1;
 
-        if (w > 1 and h > 1) {
+        const local_x: u32 = @intCast(sel_x - output.geometry.x);
+        const local_y: u32 = @intCast(sel_y - output.geometry.y);
+
+        if (sel_w > 1 and sel_h > 1 and
+            local_x < output.width and local_y < output.height and
+            local_x + sel_w > 0 and local_y + sel_h > 0)
+        {
+            const img_surface = c.cairo_image_surface_create_for_data(
+                @ptrCast(state.image),
+                c.CAIRO_FORMAT_ARGB32,
+                state.image_width,
+                state.image_height,
+                state.image_width * 4,
+            );
+            defer c.cairo_surface_destroy(img_surface);
+
             c.cairo_save(cr);
-            c.cairo_set_operator(cr, c.CAIRO_OPERATOR_CLEAR);
-            c.cairo_rectangle(cr, @floatFromInt(x), @floatFromInt(y), @floatFromInt(w), @floatFromInt(h));
+            c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+            c.cairo_set_source_surface(cr, img_surface, @floatFromInt(-img_x), @floatFromInt(-img_y));
+            c.cairo_rectangle(cr, @floatFromInt(local_x), @floatFromInt(local_y), @floatFromInt(sel_w), @floatFromInt(sel_h));
             c.cairo_fill(cr);
             c.cairo_restore(cr);
 
             c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 1.0);
             c.cairo_set_line_width(cr, 2.0);
-            c.cairo_rectangle(cr, @floatFromInt(x), @floatFromInt(y), @floatFromInt(w), @floatFromInt(h));
+            c.cairo_rectangle(cr, @floatFromInt(local_x), @floatFromInt(local_y), @floatFromInt(sel_w), @floatFromInt(sel_h));
             c.cairo_stroke(cr);
         }
-    } else if (context.has_last_selection) {
-        const x = context.last_selection_x;
-        const y = context.last_selection_y;
-        const w = context.last_selection_width;
-        const h = context.last_selection_height;
+    } else if (state.has_last_selection) {
+        const local_x = state.last_selection_x - output.geometry.x;
+        const local_y = state.last_selection_y - output.geometry.y;
+        const sel_w = state.last_selection_width;
+        const sel_h = state.last_selection_height;
 
-        if (w > 1 and h > 1) {
+        if (sel_w > 1 and sel_h > 1 and
+            local_x < output.width and local_y < output.height and
+            local_x + sel_w > 0 and local_y + sel_h > 0)
+        {
+            const img_surface = c.cairo_image_surface_create_for_data(
+                @ptrCast(state.image),
+                c.CAIRO_FORMAT_ARGB32,
+                state.image_width,
+                state.image_height,
+                state.image_width * 4,
+            );
+            defer c.cairo_surface_destroy(img_surface);
+
             c.cairo_save(cr);
-            c.cairo_set_operator(cr, c.CAIRO_OPERATOR_CLEAR);
-            c.cairo_rectangle(cr, @floatFromInt(x), @floatFromInt(y), @floatFromInt(w), @floatFromInt(h));
+            c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+            c.cairo_set_source_surface(cr, img_surface, @floatFromInt(-img_x), @floatFromInt(-img_y));
+            c.cairo_rectangle(cr, @floatFromInt(local_x), @floatFromInt(local_y), @floatFromInt(sel_w), @floatFromInt(sel_h));
             c.cairo_fill(cr);
             c.cairo_restore(cr);
 
             c.cairo_set_source_rgba(cr, 0.0, 1.0, 0.0, 1.0);
             c.cairo_set_line_width(cr, 3.0);
-            c.cairo_rectangle(cr, @floatFromInt(x), @floatFromInt(y), @floatFromInt(w), @floatFromInt(h));
+            c.cairo_rectangle(cr, @floatFromInt(local_x), @floatFromInt(local_y), @floatFromInt(sel_w), @floatFromInt(sel_h));
             c.cairo_stroke(cr);
         }
     }
 }
 
-fn setDirty(context: *Context) void {
-    context.dirty = true;
-    if (context.frame_callback != null) {
+fn setOutputDirty(output: *Output) void {
+    output.dirty = true;
+    if (output.frame_callback != null) {
         return;
     }
 
-    context.frame_callback = context.wl_subsurface_surface.?.frame() catch return;
-    context.frame_callback.?.setListener(*Context, frameListener, context);
-    context.wl_subsurface_surface.?.commit();
+    output.frame_callback = output.surface.?.frame() catch return;
+    output.frame_callback.?.setListener(*Output, frameListener, output);
+    output.surface.?.commit();
 }
 
-fn frameListener(callback: *wl.Callback, event: wl.Callback.Event, context: *Context) void {
+fn sendFrame(output: *Output) void {
+    const state = output.state.?;
+
+    if (!output.configured) {
+        return;
+    }
+
+    const buffer_width = output.width * output.scale;
+    const buffer_height = output.height * output.scale;
+
+    output.current_buffer = getNextBuffer(
+        state.wl_shm.?,
+        &output.buffers,
+        buffer_width,
+        buffer_height,
+    );
+    if (output.current_buffer == null) {
+        return;
+    }
+    output.current_buffer.?.busy = true;
+
+    renderOutput(output);
+
+    if (state.selecting) {
+        output.frame_callback = output.surface.?.frame() catch return;
+        output.frame_callback.?.setListener(*Output, frameListener, output);
+    }
+
+    output.surface.?.attach(output.current_buffer.?.buffer, 0, 0);
+    output.surface.?.damage(0, 0, output.width, output.height);
+    output.surface.?.setBufferScale(output.scale);
+    output.surface.?.commit();
+    output.dirty = false;
+}
+
+fn frameListener(callback: *wl.Callback, event: wl.Callback.Event, output: *Output) void {
     switch (event) {
         .done => {
             callback.destroy();
-            context.frame_callback = null;
+            output.frame_callback = null;
 
-            if (context.dirty) {
-                sendFrame(context);
+            if (output.dirty) {
+                sendFrame(output);
             }
         },
     }
 }
 
-fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, context: *Context) void {
+fn setAllOutputsDirty(state: *State) void {
+    for (state.outputs.items) |output| {
+        setOutputDirty(output);
+    }
+}
+
+fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *State) void {
     switch (event) {
         .global => |global| {
             const event_str = std.meta.stringToEnum(EventInterfaces, mem.span(global.interface)) orelse return;
             switch (event_str) {
                 .wl_compositor => {
-                    context.wl_compositor = registry.bind(
+                    state.wl_compositor = registry.bind(
                         global.name,
                         wl.Compositor,
                         wl.Compositor.generated_version,
                     ) catch @panic("Failed to bind wl_compositor");
-                    std.log.info("Got compositor event", .{});
+                    std.log.info("Got compositor", .{});
                 },
                 .wl_output => {
-                    context.wl_output = registry.bind(
+                    const wl_output = registry.bind(
                         global.name,
                         wl.Output,
                         wl.Output.generated_version,
                     ) catch @panic("Failed to bind wl_output");
-                    std.log.info("Got wl_output event", .{});
+
+                    const output = state.allocator.create(Output) catch @panic("OOM");
+                    output.* = .{
+                        .wl_output = wl_output,
+                        .state = state,
+                    };
+                    state.outputs.append(state.allocator, output) catch @panic("OOM");
+
+                    wl_output.setListener(*Output, outputListener, output);
+                    std.log.info("Got wl_output", .{});
                 },
                 .wl_shm => {
-                    context.wl_shm = registry.bind(
+                    state.wl_shm = registry.bind(
                         global.name,
                         wl.Shm,
                         wl.Shm.generated_version,
                     ) catch @panic("Failed to bind wl_shm");
-                    std.log.info("Got wl_shm event", .{});
+                    std.log.info("Got wl_shm", .{});
                 },
                 .wl_seat => {
-                    context.wl_seat = registry.bind(
+                    state.wl_seat = registry.bind(
                         global.name,
                         wl.Seat,
                         wl.Seat.generated_version,
                     ) catch @panic("Failed to bind wl_seat");
-                    context.wl_seat.?.setListener(*Context, seat_listener, context);
-                    std.log.info("wl_seat event", .{});
-                },
-                .wl_subcompositor => {
-                    context.wl_subcompositor = registry.bind(
-                        global.name,
-                        wl.Subcompositor,
-                        wl.Subcompositor.generated_version,
-                    ) catch @panic("Failed to bind wl_subcompositor");
-                    std.log.info("Got wl_subcompositor", .{});
+                    state.wl_seat.?.setListener(*State, seatListener, state);
+                    std.log.info("Got wl_seat", .{});
                 },
                 .zwlr_layer_shell_v1 => {
-                    context.zwlr_layer_shell = registry.bind(
+                    state.zwlr_layer_shell = registry.bind(
                         global.name,
                         zwlr.LayerShellV1,
                         zwlr.LayerShellV1.generated_version,
                     ) catch @panic("Failed to bind zwlr_layer_shell_v1");
-                    std.log.info("zwlr_layer_shell_v1 event", .{});
+                    std.log.info("Got zwlr_layer_shell_v1", .{});
                 },
             }
         },
@@ -374,33 +495,37 @@ fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, context: 
     }
 }
 
-fn wl_buffer_listener(buffer: *wl.Buffer, event: wl.Buffer.Event, _: *Context) void {
+fn outputListener(_: *wl.Output, event: wl.Output.Event, output: *Output) void {
     switch (event) {
-        .release => {
-            buffer.destroy();
+        .geometry => |geom| {
+            output.geometry.x = geom.x;
+            output.geometry.y = geom.y;
         },
+        .mode => |mode| {
+            if (mode.flags.current) {
+                output.geometry.width = mode.width;
+                output.geometry.height = mode.height;
+            }
+        },
+        .scale => |scale| {
+            output.scale = scale.factor;
+        },
+        .done => {},
+        else => {},
     }
 }
 
-fn layer_surface_listener(layer_surface: *zwlr.LayerSurfaceV1, event: zwlr.LayerSurfaceV1.Event, context: *Context) void {
+fn layerSurfaceListener(layer_surface: *zwlr.LayerSurfaceV1, event: zwlr.LayerSurfaceV1.Event, output: *Output) void {
     switch (event) {
         .configure => |configure| {
             std.log.debug("Layer surface configured: {}x{}", .{ configure.width, configure.height });
             layer_surface.ackConfigure(configure.serial);
 
-            context.configured = true;
+            output.configured = true;
+            output.width = @intCast(configure.width);
+            output.height = @intCast(configure.height);
 
-            draw(context) catch return;
-
-            if (context.wl_subsurface == null) {
-                context.wl_subsurface_surface = context.wl_compositor.?.createSurface() catch return;
-                context.wl_subsurface = context.wl_subcompositor.?.getSubsurface(context.wl_subsurface_surface.?, context.wl_surface.?) catch return;
-                context.wl_subsurface.?.setPosition(0, 0);
-                context.wl_subsurface.?.setDesync();
-
-                context.dirty = true;
-                sendFrame(context);
-            }
+            sendFrame(output);
         },
         .closed => {
             std.process.exit(0);
@@ -408,18 +533,18 @@ fn layer_surface_listener(layer_surface: *zwlr.LayerSurfaceV1, event: zwlr.Layer
     }
 }
 
-fn seat_listener(seat: *wl.Seat, event: wl.Seat.Event, context: *Context) void {
+fn seatListener(seat: *wl.Seat, event: wl.Seat.Event, state: *State) void {
     switch (event) {
         .capabilities => |caps| {
             if (caps.capabilities.keyboard) {
-                context.wl_keyboard = seat.getKeyboard() catch return;
-                context.wl_keyboard.?.setListener(*Context, keyboard_listener, context);
+                state.wl_keyboard = seat.getKeyboard() catch return;
+                state.wl_keyboard.?.setListener(*State, keyboardListener, state);
                 std.log.info("Keyboard capability available", .{});
             }
 
             if (caps.capabilities.pointer) {
-                context.wl_pointer = seat.getPointer() catch return;
-                context.wl_pointer.?.setListener(*Context, pointer_listener, context);
+                state.wl_pointer = seat.getPointer() catch return;
+                state.wl_pointer.?.setListener(*State, pointerListener, state);
                 std.log.info("Pointer capability available", .{});
             }
         },
@@ -427,20 +552,20 @@ fn seat_listener(seat: *wl.Seat, event: wl.Seat.Event, context: *Context) void {
     }
 }
 
-fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, context: *Context) void {
+fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *State) void {
     switch (event) {
         .key => |key| {
             if (key.state == .pressed) {
-                if (key.key == 1) { // ESC key
+                if (key.key == 1) { // ESC
                     std.debug.print("ESC pressed, exiting\n", .{});
                     std.process.exit(0);
-                } else if (key.key == 28) { // ENTER key
-                    if (context.has_last_selection) {
+                } else if (key.key == 28) { // ENTER
+                    if (state.has_last_selection) {
                         std.debug.print("{d},{d} {d}x{d}\n", .{
-                            context.last_selection_x,
-                            context.last_selection_y,
-                            context.last_selection_width,
-                            context.last_selection_height,
+                            state.last_selection_x,
+                            state.last_selection_y,
+                            state.last_selection_width,
+                            state.last_selection_height,
                         });
                         std.process.exit(0);
                     }
@@ -451,42 +576,44 @@ fn keyboard_listener(_: *wl.Keyboard, event: wl.Keyboard.Event, context: *Contex
     }
 }
 
-fn pointer_listener(_: *wl.Pointer, event: wl.Pointer.Event, context: *Context) void {
+fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *State) void {
     switch (event) {
+        .enter => |enter| {
+            state.pointer_x = @intCast(enter.surface_x.toInt());
+            state.pointer_y = @intCast(enter.surface_y.toInt());
+        },
         .motion => |motion| {
-            context.pointer_x = @intCast(motion.surface_x.toInt());
-            context.pointer_y = @intCast(motion.surface_y.toInt());
+            state.pointer_x = @intCast(motion.surface_x.toInt());
+            state.pointer_y = @intCast(motion.surface_y.toInt());
 
-            if (context.selecting) {
-                setDirty(context);
+            if (state.selecting) {
+                setAllOutputsDirty(state);
             }
         },
         .button => |button| {
             if (button.button == 0x110) { // BTN_LEFT
                 if (button.state == .pressed) {
-                    context.selecting = true;
-                    context.anchor_x = context.pointer_x;
-                    context.anchor_y = context.pointer_y;
-                    std.log.debug("Started selection at: {d},{d}", .{ context.anchor_x, context.anchor_y });
-                    setDirty(context);
-                } else if (button.state == .released and context.selecting) {
-                    context.selecting = false;
+                    state.selecting = true;
+                    state.anchor_x = state.pointer_x;
+                    state.anchor_y = state.pointer_y;
+                    setAllOutputsDirty(state);
+                } else if (button.state == .released and state.selecting) {
+                    state.selecting = false;
 
-                    const x = @min(context.anchor_x, context.pointer_x);
-                    const y = @min(context.anchor_y, context.pointer_y);
-                    const w = @abs(context.pointer_x - context.anchor_x) + 1;
-                    const h = @abs(context.pointer_y - context.anchor_y) + 1;
+                    const x = @min(state.anchor_x, state.pointer_x);
+                    const y = @min(state.anchor_y, state.pointer_y);
+                    const w = @abs(state.pointer_x - state.anchor_x) + 1;
+                    const h = @abs(state.pointer_y - state.anchor_y) + 1;
 
                     if (w > 1 and h > 1) {
-                        context.has_last_selection = true;
-                        context.last_selection_x = x;
-                        context.last_selection_y = y;
-                        context.last_selection_width = @intCast(w);
-                        context.last_selection_height = @intCast(h);
+                        state.has_last_selection = true;
+                        state.last_selection_x = x;
+                        state.last_selection_y = y;
+                        state.last_selection_width = @intCast(w);
+                        state.last_selection_height = @intCast(h);
 
-                        std.log.info("Selection saved: {d},{d} {d}x{d} (Press ENTER to confirm or draw again)", .{ x, y, w, h });
-
-                        setDirty(context);
+                        std.log.info("Selection: {d},{d} {d}x{d}", .{ x, y, w, h });
+                        setAllOutputsDirty(state);
                     }
                 }
             }
@@ -494,224 +621,4 @@ fn pointer_listener(_: *wl.Pointer, event: wl.Pointer.Event, context: *Context) 
         .frame => {},
         else => {},
     }
-}
-
-fn output_listener(_: *wl.Output, event: wl.Output.Event, _: *Context) void {
-    switch (event) {
-        .done => {},
-        else => {},
-    }
-}
-
-fn checkScreenshotPortal(conn: ?*c.DBusConnection) !bool {
-    std.log.debug("Checking screenshot portal", .{});
-
-    const msg = c.dbus_message_new_method_call(
-        "org.freedesktop.DBus",
-        "/org/freedesktop/DBus",
-        "org.freedesktop.DBus",
-        "ListNames",
-    );
-    if (msg == null) {
-        return error.MessageCreateFailed;
-    }
-
-    defer c.dbus_message_unref(msg);
-
-    const reply = c.dbus_connection_send_with_reply_and_block(conn, msg, 1000, null);
-    if (reply == null) {
-        return error.NoReply;
-    }
-
-    defer c.dbus_message_unref(reply);
-
-    var iter: c.DBusMessageIter = undefined;
-    if (c.dbus_message_iter_init(reply, &iter) == 0) {
-        return false;
-    }
-
-    var array_iter: c.DBusMessageIter = undefined;
-    c.dbus_message_iter_recurse(&iter, &array_iter);
-
-    while (c.dbus_message_iter_get_arg_type(&array_iter) != c.DBUS_TYPE_INVALID) {
-        var name: [*c]const u8 = undefined;
-        c.dbus_message_iter_get_basic(&array_iter, @ptrCast(&name));
-        if (std.mem.eql(u8, std.mem.span(name), "org.freedesktop.portal.Desktop")) {
-            return true;
-        }
-        _ = c.dbus_message_iter_next(&array_iter);
-    }
-
-    return false;
-}
-
-fn getScreenshotRequestHandle(conn: ?*c.DBusConnection) ![*c]const u8 {
-    std.log.debug("Requesting screenshot handle via d-bus", .{});
-
-    const msg = c.dbus_message_new_method_call(
-        "org.freedesktop.portal.Desktop",
-        "/org/freedesktop/portal/desktop",
-        "org.freedesktop.portal.Screenshot",
-        "Screenshot",
-    );
-    if (msg == null) {
-        return error.MessageCreateFailed;
-    }
-
-    defer c.dbus_message_unref(msg);
-
-    var iter: c.DBusMessageIter = undefined;
-    c.dbus_message_iter_init_append(msg, &iter);
-
-    const parent_window: [*c]const u8 = "";
-    if (c.dbus_message_iter_append_basic(&iter, c.DBUS_TYPE_STRING, @ptrCast(&parent_window)) == 0) {
-        return error.AppendFailed;
-    }
-
-    var dict_iter: c.DBusMessageIter = undefined;
-    if (c.dbus_message_iter_open_container(&iter, c.DBUS_TYPE_ARRAY, "{sv}", &dict_iter) == 0) {
-        return error.ContainerOpenFailed;
-    }
-
-    try appendDictBoolEntry(&dict_iter, "interactive", false);
-    try appendDictBoolEntry(&dict_iter, "modal", false);
-
-    if (c.dbus_message_iter_close_container(&iter, &dict_iter) == 0) {
-        return error.ContainerCloseFailed;
-    }
-
-    const reply = c.dbus_connection_send_with_reply_and_block(conn, msg, -1, null);
-    if (reply == null) {
-        std.log.err("Failed to get reply\n", .{});
-        return error.NoReply;
-    }
-    defer c.dbus_message_unref(reply);
-
-    var reply_iter: c.DBusMessageIter = undefined;
-    if (c.dbus_message_iter_init(reply, &reply_iter) == 0) {
-        return error.NoResponseData;
-    }
-
-    var request_handle: [*c]const u8 = undefined;
-    c.dbus_message_iter_get_basic(&reply_iter, @ptrCast(&request_handle));
-
-    return request_handle;
-}
-
-fn appendDictBoolEntry(dict_iter: *c.DBusMessageIter, key: [*c]const u8, value: bool) !void {
-    var entry_iter: c.DBusMessageIter = undefined;
-    if (c.dbus_message_iter_open_container(dict_iter, c.DBUS_TYPE_DICT_ENTRY, null, &entry_iter) == 0) {
-        return error.DictEntryOpenFailed;
-    }
-
-    if (c.dbus_message_iter_append_basic(&entry_iter, c.DBUS_TYPE_STRING, @ptrCast(&key)) == 0) {
-        return error.AppendKeyFailed;
-    }
-
-    var variant_iter: c.DBusMessageIter = undefined;
-    if (c.dbus_message_iter_open_container(&entry_iter, c.DBUS_TYPE_VARIANT, "b", &variant_iter) == 0) {
-        return error.VariantOpenFailed;
-    }
-
-    const bool_val: u32 = if (value) 1 else 0;
-    if (c.dbus_message_iter_append_basic(&variant_iter, c.DBUS_TYPE_BOOLEAN, @ptrCast(&bool_val)) == 0) {
-        return error.AppendValueFailed;
-    }
-
-    if (c.dbus_message_iter_close_container(&entry_iter, &variant_iter) == 0) {
-        return error.VariantCloseFailed;
-    }
-
-    if (c.dbus_message_iter_close_container(dict_iter, &entry_iter) == 0) {
-        return error.DictEntryCloseFailed;
-    }
-}
-
-fn getScreenshotURI(conn: ?*c.DBusConnection) ![*c]const u8 {
-    const request_handle = try getScreenshotRequestHandle(conn);
-    std.log.debug("Request handle: {s}\n", .{request_handle});
-
-    var buf: [512]u8 = undefined;
-    const match_rule = try std.fmt.bufPrintZ(&buf, "type='signal',interface='org.freedesktop.portal.Request',member='Response',path='{s}'", .{request_handle});
-
-    c.dbus_bus_add_match(conn, match_rule.ptr, null);
-    c.dbus_connection_flush(conn);
-
-    while (c.dbus_connection_read_write(conn, @intCast(2000)) != 0) {
-        const message = c.dbus_connection_pop_message(conn);
-        if (message == null) {
-            continue;
-        }
-        defer c.dbus_message_unref(message);
-
-        if (c.dbus_message_is_signal(message, "org.freedesktop.portal.Request", "Response") == 0) {
-            continue;
-        }
-
-        var iter: c.DBusMessageIter = undefined;
-        if (c.dbus_message_iter_init(message, &iter) == 0) {
-            return error.DbusNoArguments;
-        }
-
-        var response_code: u32 = undefined;
-        c.dbus_message_iter_get_basic(&iter, @ptrCast(&response_code));
-
-        _ = c.dbus_message_iter_next(&iter);
-
-        var dict_iter: c.DBusMessageIter = undefined;
-        c.dbus_message_iter_recurse(&iter, &dict_iter);
-
-        while (c.dbus_message_iter_get_arg_type(&dict_iter) != c.DBUS_TYPE_INVALID) {
-            var entry_iter: c.DBusMessageIter = undefined;
-            c.dbus_message_iter_recurse(&dict_iter, &entry_iter);
-
-            var key: [*c]const u8 = undefined;
-            c.dbus_message_iter_get_basic(&entry_iter, @ptrCast(&key));
-
-            _ = c.dbus_message_iter_next(&entry_iter);
-
-            if (std.mem.eql(u8, std.mem.span(key), "uri")) {
-                var variant_iter: c.DBusMessageIter = undefined;
-                c.dbus_message_iter_recurse(&entry_iter, &variant_iter);
-
-                var uri: [*c]const u8 = undefined;
-                c.dbus_message_iter_get_basic(&variant_iter, @ptrCast(&uri));
-
-                return uri;
-            }
-
-            _ = c.dbus_message_iter_next(&dict_iter);
-        }
-    }
-
-    return error.DbusTimeout;
-}
-
-fn initBuffer(context: *Context) !Buffer {
-    const fd = os.linux.memfd_create("/overlay", 0);
-
-    const size: i32 = context.width * context.height * 4;
-    _ = os.linux.ftruncate(@intCast(fd), size);
-
-    const data = os.linux.mmap(
-        null,
-        @intCast(size),
-        os.linux.PROT.READ | os.linux.PROT.WRITE,
-        .{ .TYPE = .SHARED },
-        @intCast(fd),
-        0,
-    );
-
-    const data_ptr: [*]u8 = @ptrFromInt(data);
-
-    const pool = try context.wl_shm.?.createPool(@intCast(fd), size);
-    defer pool.destroy();
-
-    const buffer = try pool.createBuffer(0, context.width, context.height, context.width * 4, .argb8888);
-    return .{
-        .data_ptr = data_ptr,
-        .fd = @intCast(fd),
-        .buffer = buffer,
-        .size = @intCast(size),
-    };
 }
