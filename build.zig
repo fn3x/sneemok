@@ -34,8 +34,8 @@ pub fn build(b: *std.Build) void {
     wlroots.resolved_target = target;
     wlroots.linkSystemLibrary("wlroots-0.19", .{});
 
-    const shutter = b.addExecutable(.{
-        .name = "shutter",
+    const exe = b.addExecutable(.{
+        .name = "sneemok",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -43,24 +43,24 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    shutter.linkLibC();
-    shutter.linkSystemLibrary("wayland-client");
-    shutter.linkSystemLibrary("dbus-1");
-    shutter.linkSystemLibrary("wayland-cursor");
-    shutter.linkSystemLibrary("cairo");
+    exe.linkLibC();
+    exe.linkSystemLibrary("wayland-client");
+    exe.linkSystemLibrary("dbus-1");
+    exe.linkSystemLibrary("wayland-cursor");
+    exe.linkSystemLibrary("cairo");
 
-    shutter.addIncludePath(b.path("headers"));
+    exe.addIncludePath(b.path("headers"));
 
-    shutter.root_module.addImport("wayland", wayland);
-    shutter.root_module.addImport("xkbcommon", xkbcommon);
-    shutter.root_module.addImport("wlroots", wlroots);
+    exe.root_module.addImport("wayland", wayland);
+    exe.root_module.addImport("xkbcommon", xkbcommon);
+    exe.root_module.addImport("wlroots", wlroots);
 
-    shutter.addIncludePath(.{ .cwd_relative = "/usr/include/dbus-1.0" });
-    shutter.addIncludePath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/dbus-1.0/include" });
-    shutter.addIncludePath(.{ .cwd_relative = "/usr/lib/dbus-1.0/include" });
+    exe.addIncludePath(.{ .cwd_relative = "/usr/include/dbus-1.0" });
+    exe.addIncludePath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/dbus-1.0/include" });
+    exe.addIncludePath(.{ .cwd_relative = "/usr/lib/dbus-1.0/include" });
 
-    b.installArtifact(shutter);
-    const run_exe = b.addRunArtifact(shutter);
+    b.installArtifact(exe);
+    const run_exe = b.addRunArtifact(exe);
 
     const run_step = b.step("run", "Run the application");
     run_step.dependOn(&run_exe.step);
