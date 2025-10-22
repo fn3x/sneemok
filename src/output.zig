@@ -11,13 +11,15 @@ const zwlr = wayland.client.zwlr;
 const mem = std.mem;
 const os = std.os;
 
+pub const HANDLE_SIZE: f64 = 30.0;
+
 const HandleType = enum {
     normal,
     hovered,
     active,
 };
 
-const ResizeType = enum {
+pub const ResizeType = enum {
     nw,
     n,
     ne,
@@ -97,7 +99,7 @@ pub const Output = struct {
         c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.50);
         c.cairo_paint(cr);
 
-        if (state.selecting) {
+        if (state.interaction_mode == .selecting) {
             const sel_x = @min(state.anchor_x, state.pointer_x);
             const sel_y = @min(state.anchor_y, state.pointer_y);
             const sel_w = @abs(state.pointer_x - state.anchor_x) + 1;
@@ -222,28 +224,32 @@ pub const Output = struct {
         sel_w: i32,
         sel_h: i32,
     ) void {
-        const handle_size: f64 = 10.0;
-        const half_handle: f64 = handle_size / 2.0;
+        const half_handle: f64 = HANDLE_SIZE / 2.0;
 
         const lx: f64 = @floatFromInt(local_x);
         const ly: f64 = @floatFromInt(local_y);
         const w: f64 = @floatFromInt(sel_w);
         const h: f64 = @floatFromInt(sel_h);
 
-        const handles = [_]struct { x: f64, y: f64, type_: ResizeType }{
-            .{ .x = lx - half_handle, .y = ly - half_handle, .type_ = .nw },
-            .{ .x = lx + w / 2 - half_handle, .y = ly - half_handle, .type_ = .n },
-            .{ .x = lx + w - half_handle, .y = ly - half_handle, .type_ = .ne },
-            .{ .x = lx - half_handle, .y = ly + h / 2 - half_handle, .type_ = .w },
-            .{ .x = lx + w - half_handle, .y = ly + h / 2 - half_handle, .type_ = .e },
-            .{ .x = lx - half_handle, .y = ly + h - half_handle, .type_ = .sw },
-            .{ .x = lx + w / 2 - half_handle, .y = ly + h - half_handle, .type_ = .s },
-            .{ .x = lx + w - half_handle, .y = ly + h - half_handle, .type_ = .se },
+        const handles = [_]struct { x: f64, y: f64, type: ResizeType }{
+            .{ .x = lx - half_handle, .y = ly - half_handle, .type = .nw },
+            .{ .x = lx + w / 2 - half_handle, .y = ly - half_handle, .type = .n },
+            .{ .x = lx + w - half_handle, .y = ly - half_handle, .type = .ne },
+            .{ .x = lx - half_handle, .y = ly + h / 2 - half_handle, .type = .w },
+            .{ .x = lx + w - half_handle, .y = ly + h / 2 - half_handle, .type = .e },
+            .{ .x = lx - half_handle, .y = ly + h - half_handle, .type = .sw },
+            .{ .x = lx + w / 2 - half_handle, .y = ly + h - half_handle, .type = .s },
+            .{ .x = lx + w - half_handle, .y = ly + h - half_handle, .type = .se },
         };
 
+        // const state = self.state.?;
+
         for (handles) |handle| {
-            const handle_type: HandleType = .normal;
-            drawHandle(cr, handle.x, handle.y, handle_size, handle_type);
+            const handle_type: HandleType = blk: {
+                break :blk .normal;
+            };
+
+            drawHandle(cr, handle.x, handle.y, HANDLE_SIZE, handle_type);
         }
 
         drawDimensionsLabel(cr, lx, ly, w, h);
@@ -298,8 +304,6 @@ fn drawDimensionsLabel(cr: *c.cairo_t, x: f64, y: f64, w: f64, h: f64) void {
     const label_x = x + w / 2;
     const label_y = y - 20;
     const font_size: f64 = 12;
-
-    std.log.debug("label_x={} label_y={} text_center_offset={}", .{ label_x, label_y, text_center_offset });
 
     c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.7);
     c.cairo_rectangle(cr, label_x - text_center_offset * font_size / 2, label_y - 15, text_center_offset * font_size, 20);

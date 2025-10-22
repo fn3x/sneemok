@@ -5,6 +5,8 @@ const c = @import("c.zig").c;
 const DBus = @import("dbus.zig").DBus;
 const PoolBuffer = @import("buffer.zig").PoolBuffer;
 const Output = @import("output.zig").Output;
+const HANDLE_SIZE = @import("output.zig").HANDLE_SIZE;
+const ResizeType = @import("output.zig").ResizeType;
 
 const wl = wayland.client.wl;
 const zwlr = wayland.client.zwlr;
@@ -48,6 +50,142 @@ pub const State = struct {
     last_selection_y: i32 = 0,
     last_selection_width: i32 = 0,
     last_selection_height: i32 = 0,
+
+    interaction_mode: enum {
+        none,
+        selecting,
+        moving,
+        resizing_nw,
+        resizing_ne,
+        resizing_sw,
+        resizing_se,
+        resizing_n,
+        resizing_s,
+        resizing_e,
+        resizing_w,
+    } = .none,
+
+    handle_resize: ?ResizeType = null,
+    handle_hover: ?ResizeType = null,
+
+    // Store offset from pointer to selection origin when dragging starts
+    drag_offset_x: i32 = 0,
+    drag_offset_y: i32 = 0,
+
+    pub fn getHandleAtPoint(state: *State, px: i32, py: i32) ?enum { move, nw, ne, sw, se, n, s, e, w } {
+        if (!state.has_last_selection) {
+            return null;
+        }
+
+        const x = state.last_selection_x;
+        const y = state.last_selection_y;
+        const w = state.last_selection_width;
+        const h = state.last_selection_height;
+
+        if (isPointInHandle(px, py, x, y)) {
+            return .nw;
+        }
+        if (isPointInHandle(px, py, x + w, y)) {
+            return .ne;
+        }
+        if (isPointInHandle(px, py, x, y + h)) {
+            return .sw;
+        }
+        if (isPointInHandle(px, py, x + w, y + h)) {
+            return .se;
+        }
+
+        if (isPointInHandle(px, py, x + @divTrunc(w, 2), y)) {
+            return .n;
+        }
+        if (isPointInHandle(px, py, x + @divTrunc(w, 2), y + h)) {
+            return .s;
+        }
+        if (isPointInHandle(px, py, x, y + @divTrunc(h, 2))) {
+            return .w;
+        }
+        if (isPointInHandle(px, py, x + w, y + @divTrunc(h, 2))) {
+            return .e;
+        }
+
+        if (isPointInRect(px, py, x, y, w, h)) {
+            return .move;
+        }
+
+        return null;
+    }
+
+    fn isPointInRect(px: i32, py: i32, x: i32, y: i32, w: i32, h: i32) bool {
+        return px >= x and px < x + w and py >= y and py < y + h;
+    }
+
+    fn handleResize(state: *State, old_x: i32, old_y: i32) void {
+        const dx = state.pointer_x - old_x;
+        const dy = state.pointer_y - old_y;
+
+        switch (state.interaction_mode) {
+            .resizing_se => {
+                // Resize from bottom-right corner
+                state.last_selection_width = @max(1, state.last_selection_width + dx);
+                state.last_selection_height = @max(1, state.last_selection_height + dy);
+            },
+            .resizing_nw => {
+                // Resize from top-left corner
+                const new_w = state.last_selection_width - dx;
+                const new_h = state.last_selection_height - dy;
+                if (new_w > 0 and new_h > 0) {
+                    state.last_selection_x += dx;
+                    state.last_selection_y += dy;
+                    state.last_selection_width = new_w;
+                    state.last_selection_height = new_h;
+                }
+            },
+            .resizing_ne => {
+                // Resize from top-right corner
+                state.last_selection_width = @max(1, state.last_selection_width + dx);
+                state.last_selection_height = @max(1, state.last_selection_height - dy);
+                state.last_selection_y += dy;
+            },
+            .resizing_sw => {
+                // Resize from bottom-left corner
+                const new_w = state.last_selection_width - dx;
+                const new_h = state.last_selection_height + dy;
+                if (new_w > 0 and new_h > 0) {
+                    state.last_selection_x += dx;
+                    state.last_selection_width = new_w;
+                    state.last_selection_height = new_h;
+                }
+            },
+            .resizing_n => {
+                // Resize from top middle
+                const new_h = state.last_selection_height - dy;
+                if (new_h > 0) {
+                    state.last_selection_y += dy;
+                    state.last_selection_height = new_h;
+                }
+            },
+            .resizing_s => {
+                // Resize from bottom middle
+                state.last_selection_height = @max(1, state.last_selection_height + dy);
+            },
+            .resizing_w => {
+                // Resize from left middle
+                const new_w = state.last_selection_width - dx;
+                if (new_w > 0) {
+                    state.last_selection_x += dx;
+                    state.last_selection_width = new_w;
+                }
+            },
+            .resizing_e => {
+                // Resize from right middle
+                const new_w = state.last_selection_width + dx;
+                if (new_w > 0) {
+                    state.last_selection_width = new_w;
+                }
+            },
+            else => {},
+        }
+    }
 };
 
 pub fn main() !void {
@@ -295,42 +433,146 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *State) void 
             state.pointer_y = @intCast(enter.surface_y.toInt());
         },
         .motion => |motion| {
+            const old_x = state.pointer_x;
+            const old_y = state.pointer_y;
             state.pointer_x = @intCast(motion.surface_x.toInt());
             state.pointer_y = @intCast(motion.surface_y.toInt());
 
-            if (state.selecting) {
-                setAllOutputsDirty(state);
+            switch (state.interaction_mode) {
+                .selecting => {
+                    setAllOutputsDirty(state);
+                },
+                .moving => {
+                    const new_x = state.pointer_x - state.drag_offset_x;
+                    const new_y = state.pointer_y - state.drag_offset_y;
+
+                    state.last_selection_x = clampToBounds(new_x, 0, state.image_width - state.last_selection_width);
+                    state.last_selection_y = clampToBounds(new_y, 0, state.image_height - state.last_selection_height);
+
+                    setAllOutputsDirty(state);
+                },
+                .resizing_nw, .resizing_ne, .resizing_sw, .resizing_se, .resizing_n, .resizing_s, .resizing_e, .resizing_w => {
+                    state.handleResize(old_x, old_y);
+                    setAllOutputsDirty(state);
+                },
+                else => {
+                    const handle = state.getHandleAtPoint(state.pointer_x, state.pointer_y);
+                    if (handle == null or handle.? == .move) {
+                        state.handle_resize = null;
+                        return;
+                    }
+
+                    switch (handle.?) {
+                        .n => {
+                            state.handle_resize = .n;
+                        },
+                        .e => {
+                            state.handle_resize = .e;
+                        },
+                        .s => {
+                            state.handle_resize = .s;
+                        },
+                        .w => {
+                            state.handle_resize = .w;
+                        },
+                        .ne => {
+                            state.handle_resize = .ne;
+                        },
+                        .se => {
+                            state.handle_resize = .se;
+                        },
+                        .nw => {
+                            state.handle_resize = .nw;
+                        },
+                        .sw => {
+                            state.handle_resize = .sw;
+                        },
+                        else => {},
+                    }
+                },
             }
         },
+
         .button => |button| {
             if (button.button == 0x110) { // BTN_LEFT
                 if (button.state == .pressed) {
-                    state.selecting = true;
-                    state.anchor_x = state.pointer_x;
-                    state.anchor_y = state.pointer_y;
-                    setAllOutputsDirty(state);
-                } else if (button.state == .released and state.selecting) {
-                    state.selecting = false;
+                    if (state.has_last_selection) {
+                        const handle = state.getHandleAtPoint(state.pointer_x, state.pointer_y);
 
-                    const x = @min(state.anchor_x, state.pointer_x);
-                    const y = @min(state.anchor_y, state.pointer_y);
-                    const w = @abs(state.pointer_x - state.anchor_x) + 1;
-                    const h = @abs(state.pointer_y - state.anchor_y) + 1;
-
-                    if (w > 1 and h > 1) {
-                        state.has_last_selection = true;
-                        state.last_selection_x = x;
-                        state.last_selection_y = y;
-                        state.last_selection_width = @intCast(w);
-                        state.last_selection_height = @intCast(h);
-
-                        std.log.info("Selection: {d},{d} {d}x{d}", .{ x, y, w, h });
+                        if (handle) |h| {
+                            switch (h) {
+                                .move => {
+                                    state.interaction_mode = .moving;
+                                    state.drag_offset_x = state.pointer_x - state.last_selection_x;
+                                    state.drag_offset_y = state.pointer_y - state.last_selection_y;
+                                },
+                                .nw => state.interaction_mode = .resizing_nw,
+                                .ne => state.interaction_mode = .resizing_ne,
+                                .sw => state.interaction_mode = .resizing_sw,
+                                .se => state.interaction_mode = .resizing_se,
+                                .n => state.interaction_mode = .resizing_n,
+                                .s => state.interaction_mode = .resizing_s,
+                                .e => state.interaction_mode = .resizing_e,
+                                .w => state.interaction_mode = .resizing_w,
+                            }
+                            setAllOutputsDirty(state);
+                        } else {
+                            state.interaction_mode = .selecting;
+                            state.has_last_selection = false;
+                            state.anchor_x = state.pointer_x;
+                            state.anchor_y = state.pointer_y;
+                            setAllOutputsDirty(state);
+                        }
+                    } else {
+                        state.interaction_mode = .selecting;
+                        state.anchor_x = state.pointer_x;
+                        state.anchor_y = state.pointer_y;
                         setAllOutputsDirty(state);
                     }
+                } else if (button.state == .released) {
+                    switch (state.interaction_mode) {
+                        .selecting => {
+                            const x = @min(state.anchor_x, state.pointer_x);
+                            const y = @min(state.anchor_y, state.pointer_y);
+                            const w = @abs(state.pointer_x - state.anchor_x) + 1;
+                            const h = @abs(state.pointer_y - state.anchor_y) + 1;
+
+                            if (w > 1 and h > 1) {
+                                state.has_last_selection = true;
+                                state.last_selection_x = x;
+                                state.last_selection_y = y;
+                                state.last_selection_width = @intCast(w);
+                                state.last_selection_height = @intCast(h);
+                                std.log.info("Selection: {d},{d} {d}x{d}", .{ x, y, w, h });
+                            }
+                        },
+                        .moving, .resizing_nw, .resizing_ne, .resizing_sw, .resizing_se, .resizing_n, .resizing_s, .resizing_e, .resizing_w => {
+                            std.log.info("Final position: {d},{d} {d}x{d}", .{
+                                state.last_selection_x,
+                                state.last_selection_y,
+                                state.last_selection_width,
+                                state.last_selection_height,
+                            });
+                        },
+                        else => {},
+                    }
+
+                    state.interaction_mode = .none;
+                    setAllOutputsDirty(state);
                 }
             }
         },
         .frame => {},
         else => {},
     }
+}
+
+fn clampToBounds(value: i32, min: i32, max: i32) i32 {
+    return @max(min, @min(max, value));
+}
+
+fn isPointInHandle(px: i32, py: i32, hx: i32, hy: i32) bool {
+    const half: i32 = @divTrunc(HANDLE_SIZE, 2);
+    return px >= hx - half and px < hx + half and
+        py >= hy - half and py < hy + half;
 }
