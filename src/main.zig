@@ -547,7 +547,7 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *State) void 
                             }
                         },
                         .moving, .resizing_nw, .resizing_ne, .resizing_sw, .resizing_se, .resizing_n, .resizing_s, .resizing_e, .resizing_w => {
-                            std.log.info("Final position: {d},{d} {d}x{d}", .{
+                            std.log.info("Resized/moved to: {d},{d} {d}x{d}", .{
                                 state.last_selection_x,
                                 state.last_selection_y,
                                 state.last_selection_width,
