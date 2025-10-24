@@ -5,8 +5,8 @@ const c = @import("c.zig").c;
 const DBus = @import("dbus.zig").DBus;
 const PoolBuffer = @import("buffer.zig").PoolBuffer;
 const Output = @import("output.zig").Output;
-const HANDLE_SIZE = @import("output.zig").HANDLE_SIZE;
-const ResizeType = @import("output.zig").ResizeType;
+const HANDLE_SIZE = @import("./gui/gui.zig").RESIZE_HANDLE_SIZE;
+const ResizeType = @import("./gui/gui.zig").ResizeType;
 
 const wl = wayland.client.wl;
 const zwlr = wayland.client.zwlr;
@@ -125,12 +125,12 @@ pub const State = struct {
 
         switch (state.interaction_mode) {
             .resizing_se => {
-                // Resize from bottom-right corner
+                // Bottom-right corner
                 state.last_selection_width = @max(1, state.last_selection_width + dx);
                 state.last_selection_height = @max(1, state.last_selection_height + dy);
             },
             .resizing_nw => {
-                // Resize from top-left corner
+                // Top-left corner
                 const new_w = state.last_selection_width - dx;
                 const new_h = state.last_selection_height - dy;
                 if (new_w > 0 and new_h > 0) {
@@ -141,13 +141,13 @@ pub const State = struct {
                 }
             },
             .resizing_ne => {
-                // Resize from top-right corner
+                // Top-right corner
                 state.last_selection_width = @max(1, state.last_selection_width + dx);
                 state.last_selection_height = @max(1, state.last_selection_height - dy);
                 state.last_selection_y += dy;
             },
             .resizing_sw => {
-                // Resize from bottom-left corner
+                // Bottom-left corner
                 const new_w = state.last_selection_width - dx;
                 const new_h = state.last_selection_height + dy;
                 if (new_w > 0 and new_h > 0) {
@@ -157,7 +157,7 @@ pub const State = struct {
                 }
             },
             .resizing_n => {
-                // Resize from top middle
+                // Top middle
                 const new_h = state.last_selection_height - dy;
                 if (new_h > 0) {
                     state.last_selection_y += dy;
@@ -165,11 +165,11 @@ pub const State = struct {
                 }
             },
             .resizing_s => {
-                // Resize from bottom middle
+                // Bottom middle
                 state.last_selection_height = @max(1, state.last_selection_height + dy);
             },
             .resizing_w => {
-                // Resize from left middle
+                // Left middle
                 const new_w = state.last_selection_width - dx;
                 if (new_w > 0) {
                     state.last_selection_x += dx;
@@ -177,7 +177,7 @@ pub const State = struct {
                 }
             },
             .resizing_e => {
-                // Resize from right middle
+                // Right middle
                 const new_w = state.last_selection_width + dx;
                 if (new_w > 0) {
                     state.last_selection_width = new_w;
@@ -494,8 +494,12 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *State) void 
         },
 
         .button => |button| {
-            if (button.button == 0x110) { // BTN_LEFT
-                if (button.state == .pressed) {
+            if (button.button != 0x110) { // BTN_LEFT
+                return;
+            }
+
+            switch (button.state) {
+                .pressed => {
                     if (state.has_last_selection) {
                         const handle = state.getHandleAtPoint(state.pointer_x, state.pointer_y);
 
@@ -515,21 +519,19 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *State) void 
                                 .e => state.interaction_mode = .resizing_e,
                                 .w => state.interaction_mode = .resizing_w,
                             }
-                            setAllOutputsDirty(state);
                         } else {
                             state.interaction_mode = .selecting;
                             state.has_last_selection = false;
                             state.anchor_x = state.pointer_x;
                             state.anchor_y = state.pointer_y;
-                            setAllOutputsDirty(state);
                         }
                     } else {
                         state.interaction_mode = .selecting;
                         state.anchor_x = state.pointer_x;
                         state.anchor_y = state.pointer_y;
-                        setAllOutputsDirty(state);
                     }
-                } else if (button.state == .released) {
+                },
+                .released => {
                     switch (state.interaction_mode) {
                         .selecting => {
                             const x = @min(state.anchor_x, state.pointer_x);
@@ -558,9 +560,11 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *State) void 
                     }
 
                     state.interaction_mode = .none;
-                    setAllOutputsDirty(state);
-                }
+                },
+                else => {},
             }
+
+            setAllOutputsDirty(state);
         },
         .frame => {},
         else => {},
