@@ -21,65 +21,65 @@ pub const ResizeType = enum {
     se,
 };
 
-pub const GUI = struct {
-    const Self = @This();
+pub fn drawResizeHandles(cr: *c.cairo_t, x: f64, y: f64, w: f64, h: f64) void {
+    const half_handle: f64 = RESIZE_HANDLE_SIZE / 2.0;
 
-    pub fn draw(_: *Self, cr: *c.cairo_t, local_x: i32, local_y: i32, sel_w: i32, sel_h: i32) void {
-        const half_handle: f64 = RESIZE_HANDLE_SIZE / 2.0;
+    const handles = [_]struct { x: f64, y: f64, type: ResizeType }{
+        .{ .x = x - half_handle, .y = y - half_handle, .type = .nw },
+        .{ .x = x + w / 2 - half_handle, .y = y - half_handle, .type = .n },
+        .{ .x = x + w - half_handle, .y = y - half_handle, .type = .ne },
+        .{ .x = x - half_handle, .y = y + h / 2 - half_handle, .type = .w },
+        .{ .x = x + w - half_handle, .y = y + h / 2 - half_handle, .type = .e },
+        .{ .x = x - half_handle, .y = y + h - half_handle, .type = .sw },
+        .{ .x = x + w / 2 - half_handle, .y = y + h - half_handle, .type = .s },
+        .{ .x = x + w - half_handle, .y = y + h - half_handle, .type = .se },
+    };
 
-        const lx: f64 = @floatFromInt(local_x);
-        const ly: f64 = @floatFromInt(local_y);
-        const w: f64 = @floatFromInt(sel_w);
-        const h: f64 = @floatFromInt(sel_h);
-
-        const handles = [_]struct { x: f64, y: f64, type: ResizeType }{
-            .{ .x = lx - half_handle, .y = ly - half_handle, .type = .nw },
-            .{ .x = lx + w / 2 - half_handle, .y = ly - half_handle, .type = .n },
-            .{ .x = lx + w - half_handle, .y = ly - half_handle, .type = .ne },
-            .{ .x = lx - half_handle, .y = ly + h / 2 - half_handle, .type = .w },
-            .{ .x = lx + w - half_handle, .y = ly + h / 2 - half_handle, .type = .e },
-            .{ .x = lx - half_handle, .y = ly + h - half_handle, .type = .sw },
-            .{ .x = lx + w / 2 - half_handle, .y = ly + h - half_handle, .type = .s },
-            .{ .x = lx + w - half_handle, .y = ly + h - half_handle, .type = .se },
+    for (handles) |handle| {
+        const handle_type: HandleType = blk: {
+            break :blk .normal;
         };
 
-        for (handles) |handle| {
-            const handle_type: HandleType = blk: {
-                break :blk .normal;
-            };
+        const half = RESIZE_HANDLE_SIZE / 2.0;
+        const center_x = handle.x + half;
+        const center_y = handle.y + half;
 
-            drawResizeHandle(cr, handle.x, handle.y, RESIZE_HANDLE_SIZE, handle_type);
+        c.cairo_arc(cr, center_x + 1, center_y + 1, half + 1, 0, 2 * std.math.pi);
+        c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.3);
+        c.cairo_fill(cr);
+
+        c.cairo_arc(cr, center_x, center_y, half, 0, 2 * std.math.pi);
+
+        switch (handle_type) {
+            .normal => c.cairo_set_source_rgb(cr, 1.0, 1.0, 1.0),
+            .hovered => c.cairo_set_source_rgb(cr, 0.4, 0.7, 1.0),
+            .active => c.cairo_set_source_rgb(cr, 0.2, 0.5, 0.9),
         }
+        c.cairo_fill_preserve(cr);
 
-        drawDimensionsLabel(cr, lx, ly, w, h);
-        Arrow.draw(cr, lx + w / 2, ly + 30 + h, lx + 5 + w / 2, ly + 25 + h);
+        c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.9);
+        c.cairo_set_line_width(cr, 1.5);
+        c.cairo_stroke(cr);
     }
-};
-
-fn drawResizeHandle(cr: *c.cairo_t, x: f64, y: f64, size: f64, handle_type: HandleType) void {
-    const half = size / 2.0;
-    const center_x = x + half;
-    const center_y = y + half;
-
-    c.cairo_arc(cr, center_x + 1, center_y + 1, half + 1, 0, 2 * std.math.pi);
-    c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.3);
-    c.cairo_fill(cr);
-
-    c.cairo_arc(cr, center_x, center_y, half, 0, 2 * std.math.pi);
-
-    switch (handle_type) {
-        .normal => c.cairo_set_source_rgb(cr, 1.0, 1.0, 1.0),
-        .hovered => c.cairo_set_source_rgb(cr, 0.4, 0.7, 1.0),
-        .active => c.cairo_set_source_rgb(cr, 0.2, 0.5, 0.9),
-    }
-    c.cairo_fill_preserve(cr);
-
-    c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.9);
-    c.cairo_set_line_width(cr, 1.5);
-    c.cairo_stroke(cr);
 }
 
-fn drawDimensionsLabel(cr: *c.cairo_t, x: f64, y: f64, w: f64, h: f64) void {
+pub fn drawArrowHandle(cr: ?*c.cairo_t, x: f64, y: f64, w: f64, h: f64) void {
+    const arrow: Arrow.Arrow = .{
+        .start_x = x + w / 2,
+        .start_y = y + 30 + h,
+        .end_x = x + 5 + w / 2,
+        .end_y = y + 25 + h,
+        .length = 20.0,
+    };
+
+    Arrow.drawArrowHandle(cr, x + RESIZE_HANDLE_SIZE + w / 2, y + 30 + h, arrow, RESIZE_HANDLE_SIZE);
+}
+
+pub fn drawArrow(cr: ?*c.cairo_t, arrow_pos: Arrow.Arrow) void {
+    Arrow.drawArrow(cr, arrow_pos);
+}
+
+pub fn drawDimensionsLabel(cr: *c.cairo_t, x: f64, y: f64, w: f64, h: f64) void {
     var buf: [64]u8 = undefined;
     const text = std.fmt.bufPrintZ(&buf, "{d} × {d}", .{
         @as(i32, @intFromFloat(w)),

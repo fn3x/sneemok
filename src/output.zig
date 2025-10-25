@@ -4,7 +4,7 @@ const c = @import("c.zig").c;
 const DBus = @import("dbus.zig").DBus;
 const Buffer = @import("buffer.zig");
 const State = @import("main.zig").State;
-const GUI = @import("./gui/gui.zig").GUI;
+const GUI = @import("./gui/gui.zig");
 
 const wl = wayland.client.wl;
 const zwlr = wayland.client.zwlr;
@@ -34,8 +34,6 @@ pub const Output = struct {
     height: i32 = 0,
     buffers: [2]Buffer.PoolBuffer = [_]Buffer.PoolBuffer{.{}} ** 2,
     current_buffer: ?*Buffer.PoolBuffer = null,
-
-    gui: GUI = .{},
 
     const Self = @This();
 
@@ -148,7 +146,14 @@ pub const Output = struct {
                 c.cairo_rectangle(cr, @floatFromInt(local_x), @floatFromInt(local_y), @floatFromInt(sel_w), @floatFromInt(sel_h));
                 c.cairo_stroke(cr);
 
-                self.gui.draw(cr.?, local_x, local_y, sel_w, sel_h);
+                const x: f64 = @floatFromInt(local_x);
+                const y: f64 = @floatFromInt(local_y);
+                const w: f64 = @floatFromInt(sel_w);
+                const h: f64 = @floatFromInt(sel_h);
+
+                GUI.drawResizeHandles(cr.?, x, y, w, h);
+                GUI.drawDimensionsLabel(cr.?, x, y, w, h);
+                GUI.drawArrowHandle(cr.?, x, y, w, h);
             }
         }
     }
