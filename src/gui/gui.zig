@@ -2,7 +2,7 @@ const c = @import("../c.zig").c;
 const std = @import("std");
 const Arrow = @import("arrow.zig");
 
-pub const RESIZE_HANDLE_SIZE: f64 = 30.0;
+pub const HANDLE_SIZE: f64 = 30.0;
 
 pub const HandleType = enum {
     normal,
@@ -22,7 +22,7 @@ pub const ResizeType = enum {
 };
 
 pub fn drawResizeHandles(cr: *c.cairo_t, x: f64, y: f64, w: f64, h: f64) void {
-    const half_handle: f64 = RESIZE_HANDLE_SIZE / 2.0;
+    const half_handle: f64 = HANDLE_SIZE / 2.0;
 
     const handles = [_]struct { x: f64, y: f64, type: ResizeType }{
         .{ .x = x - half_handle, .y = y - half_handle, .type = .nw },
@@ -40,7 +40,7 @@ pub fn drawResizeHandles(cr: *c.cairo_t, x: f64, y: f64, w: f64, h: f64) void {
             break :blk .normal;
         };
 
-        const half = RESIZE_HANDLE_SIZE / 2.0;
+        const half = HANDLE_SIZE / 2.0;
         const center_x = handle.x + half;
         const center_y = handle.y + half;
 
@@ -63,16 +63,16 @@ pub fn drawResizeHandles(cr: *c.cairo_t, x: f64, y: f64, w: f64, h: f64) void {
     }
 }
 
-pub fn drawArrowHandle(cr: ?*c.cairo_t, x: f64, y: f64, w: f64, h: f64) void {
+pub fn drawArrowHandle(cr: ?*c.cairo_t, x: f64, y: f64, _: f64, h: f64) void {
     const arrow: Arrow.Arrow = .{
-        .start_x = x + w / 2,
-        .start_y = y + 30 + h,
-        .end_x = x + 5 + w / 2,
-        .end_y = y + 25 + h,
-        .length = 20.0,
+        .start_x = x + HANDLE_SIZE,
+        .start_y = y + HANDLE_SIZE / 2 + h,
+        .end_x = x + HANDLE_SIZE / 2 + 5,
+        .end_y = y + HANDLE_SIZE / 4 + h,
+        .length = 15.0,
     };
 
-    Arrow.drawArrowHandle(cr, x + RESIZE_HANDLE_SIZE + w / 2, y + 30 + h, arrow, RESIZE_HANDLE_SIZE);
+    Arrow.drawArrowHandle(cr, arrow, HANDLE_SIZE / 2);
 }
 
 pub fn drawArrow(cr: ?*c.cairo_t, arrow_pos: Arrow.Arrow) void {

@@ -39,7 +39,7 @@ pub fn drawArrow(cr: ?*c.cairo_t, pos: Arrow) void {
     c.cairo_stroke(cr);
 }
 
-pub fn drawArrowHandle(cr: ?*c.cairo_t, _: f64, _: f64, pos: Arrow, size: f64) void {
+pub fn drawArrowHandle(cr: ?*c.cairo_t, pos: Arrow, size: f64) void {
     const angle = math.atan2(pos.end_y - pos.start_y, pos.end_x - pos.start_x) + math.pi;
     const arrow_degrees: f64 = 0.5;
 

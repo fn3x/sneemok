@@ -5,7 +5,7 @@ const c = @import("c.zig").c;
 const DBus = @import("dbus.zig").DBus;
 const PoolBuffer = @import("buffer.zig").PoolBuffer;
 const Output = @import("output.zig").Output;
-const HANDLE_SIZE = @import("./gui/gui.zig").RESIZE_HANDLE_SIZE;
+const HANDLE_SIZE = @import("./gui/gui.zig").HANDLE_SIZE;
 const ResizeType = @import("./gui/gui.zig").ResizeType;
 
 const wl = wayland.client.wl;

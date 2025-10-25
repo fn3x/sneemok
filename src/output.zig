@@ -153,7 +153,10 @@ pub const Output = struct {
 
                 GUI.drawResizeHandles(cr.?, x, y, w, h);
                 GUI.drawDimensionsLabel(cr.?, x, y, w, h);
-                GUI.drawArrowHandle(cr.?, x, y, w, h);
+
+                if (self.state.?.interaction_mode == .none) {
+                    GUI.drawArrowHandle(cr.?, x, y, w, h);
+                }
             }
         }
     }
