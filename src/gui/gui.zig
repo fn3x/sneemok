@@ -1,6 +1,7 @@
 const c = @import("../c.zig").c;
 const std = @import("std");
 const Arrow = @import("arrow.zig");
+const Allocator = std.mem.Allocator;
 
 pub const HANDLE_SIZE: f64 = 30.0;
 
@@ -19,6 +20,67 @@ pub const ResizeType = enum {
     sw,
     s,
     se,
+};
+
+pub const ElementTag = enum {
+    arrow,
+};
+
+pub const Element = union(ElementTag) {
+    arrow: Arrow.Arrow,
+};
+
+pub const GUIState = struct {
+    const Self = @This();
+
+    allocator: Allocator,
+    elements: std.ArrayList(Element),
+
+    pub fn init(allocator: Allocator) Self {
+        const state: Self = .{
+            .allocator = &allocator,
+            .elements = std.ArrayList(Element).empty,
+        };
+
+        return state;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.elements.deinit(self.allocator);
+    }
+
+    pub fn addElement(self: *Self, element: Element) !void {
+        try self.elements.append(self.allocator, element);
+    }
+
+    pub fn popElement(self: *Self) void {
+        _ = self.elements.pop();
+    }
+
+    pub fn removeElement(self: *Self, element: *Element) void {
+        var foundIdx: ?usize = null;
+
+        for (0..self.elements.items.len) |i| {
+            if (&self.elements.items[i] == element) {
+                foundIdx = i;
+                break;
+            }
+        }
+
+        if (foundIdx) |i| {
+            _ = self.elements.orderedRemove(i);
+        }
+    }
+
+    pub fn draw(self: *Self, cr: ?*c.cairo_t) void {
+        for (self.elements.items) |el| {
+            switch (el) {
+                .arrow => |arrow| {
+                    Arrow.drawArrow(cr, arrow);
+                },
+            }
+        }
+    }
 };
 
 pub fn drawResizeHandles(cr: *c.cairo_t, x: f64, y: f64, w: f64, h: f64) void {
