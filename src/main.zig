@@ -1,18 +1,13 @@
 const std = @import("std");
 const wayland = @import("wayland");
-
 const c = @import("c.zig").c;
 const DBus = @import("dbus.zig").DBus;
-const PoolBuffer = @import("buffer.zig").PoolBuffer;
-const Output = @import("output.zig").Output;
-const HANDLE_SIZE = @import("./gui/gui.zig").HANDLE_SIZE;
-const ResizeType = @import("./gui/gui.zig").ResizeType;
+const AppState = @import("state.zig").AppState;
+const Output = @import("state.zig").Output;
+const ToolMode = @import("state.zig").ToolMode;
 
 const wl = wayland.client.wl;
 const zwlr = wayland.client.zwlr;
-
-const mem = std.mem;
-const os = std.os;
 
 const EventInterfaces = enum {
     wl_compositor,
@@ -20,172 +15,6 @@ const EventInterfaces = enum {
     wl_shm,
     wl_seat,
     zwlr_layer_shell_v1,
-};
-
-pub const State = struct {
-    allocator: std.mem.Allocator,
-    display: ?*wl.Display = null,
-    registry: ?*wl.Registry = null,
-    wl_compositor: ?*wl.Compositor = null,
-    wl_shm: ?*wl.Shm = null,
-    wl_seat: ?*wl.Seat = null,
-    wl_keyboard: ?*wl.Keyboard = null,
-    wl_pointer: ?*wl.Pointer = null,
-    zwlr_layer_shell: ?*zwlr.LayerShellV1 = null,
-
-    outputs: std.ArrayList(*Output),
-
-    image: ?[*c]u8 = null,
-    image_width: i32 = 0,
-    image_height: i32 = 0,
-
-    pointer_x: i32 = 0,
-    pointer_y: i32 = 0,
-    selecting: bool = false,
-    anchor_x: i32 = 0,
-    anchor_y: i32 = 0,
-
-    has_last_selection: bool = false,
-    last_selection_x: i32 = 0,
-    last_selection_y: i32 = 0,
-    last_selection_width: i32 = 0,
-    last_selection_height: i32 = 0,
-
-    interaction_mode: enum {
-        none,
-        selecting,
-        moving,
-        resizing_nw,
-        resizing_ne,
-        resizing_sw,
-        resizing_se,
-        resizing_n,
-        resizing_s,
-        resizing_e,
-        resizing_w,
-    } = .none,
-
-    handle_resize: ?ResizeType = null,
-    handle_hover: ?ResizeType = null,
-
-    // Store offset from pointer to selection origin when dragging starts
-    drag_offset_x: i32 = 0,
-    drag_offset_y: i32 = 0,
-
-    pub fn getHandleAtPoint(state: *State, px: i32, py: i32) ?enum { move, nw, ne, sw, se, n, s, e, w } {
-        if (!state.has_last_selection) {
-            return null;
-        }
-
-        const x = state.last_selection_x;
-        const y = state.last_selection_y;
-        const w = state.last_selection_width;
-        const h = state.last_selection_height;
-
-        if (isPointInHandle(px, py, x, y)) {
-            return .nw;
-        }
-        if (isPointInHandle(px, py, x + w, y)) {
-            return .ne;
-        }
-        if (isPointInHandle(px, py, x, y + h)) {
-            return .sw;
-        }
-        if (isPointInHandle(px, py, x + w, y + h)) {
-            return .se;
-        }
-
-        if (isPointInHandle(px, py, x + @divTrunc(w, 2), y)) {
-            return .n;
-        }
-        if (isPointInHandle(px, py, x + @divTrunc(w, 2), y + h)) {
-            return .s;
-        }
-        if (isPointInHandle(px, py, x, y + @divTrunc(h, 2))) {
-            return .w;
-        }
-        if (isPointInHandle(px, py, x + w, y + @divTrunc(h, 2))) {
-            return .e;
-        }
-
-        if (isPointInRect(px, py, x, y, w, h)) {
-            return .move;
-        }
-
-        return null;
-    }
-
-    fn isPointInRect(px: i32, py: i32, x: i32, y: i32, w: i32, h: i32) bool {
-        return px >= x and px < x + w and py >= y and py < y + h;
-    }
-
-    fn handleResize(state: *State, old_x: i32, old_y: i32) void {
-        const dx = state.pointer_x - old_x;
-        const dy = state.pointer_y - old_y;
-
-        switch (state.interaction_mode) {
-            .resizing_se => {
-                // Bottom-right corner
-                state.last_selection_width = @max(1, state.last_selection_width + dx);
-                state.last_selection_height = @max(1, state.last_selection_height + dy);
-            },
-            .resizing_nw => {
-                // Top-left corner
-                const new_w = state.last_selection_width - dx;
-                const new_h = state.last_selection_height - dy;
-                if (new_w > 0 and new_h > 0) {
-                    state.last_selection_x += dx;
-                    state.last_selection_y += dy;
-                    state.last_selection_width = new_w;
-                    state.last_selection_height = new_h;
-                }
-            },
-            .resizing_ne => {
-                // Top-right corner
-                state.last_selection_width = @max(1, state.last_selection_width + dx);
-                state.last_selection_height = @max(1, state.last_selection_height - dy);
-                state.last_selection_y += dy;
-            },
-            .resizing_sw => {
-                // Bottom-left corner
-                const new_w = state.last_selection_width - dx;
-                const new_h = state.last_selection_height + dy;
-                if (new_w > 0 and new_h > 0) {
-                    state.last_selection_x += dx;
-                    state.last_selection_width = new_w;
-                    state.last_selection_height = new_h;
-                }
-            },
-            .resizing_n => {
-                // Top middle
-                const new_h = state.last_selection_height - dy;
-                if (new_h > 0) {
-                    state.last_selection_y += dy;
-                    state.last_selection_height = new_h;
-                }
-            },
-            .resizing_s => {
-                // Bottom middle
-                state.last_selection_height = @max(1, state.last_selection_height + dy);
-            },
-            .resizing_w => {
-                // Left middle
-                const new_w = state.last_selection_width - dx;
-                if (new_w > 0) {
-                    state.last_selection_x += dx;
-                    state.last_selection_width = new_w;
-                }
-            },
-            .resizing_e => {
-                // Right middle
-                const new_w = state.last_selection_width + dx;
-                if (new_w > 0) {
-                    state.last_selection_width = new_w;
-                }
-            },
-            else => {},
-        }
-    }
 };
 
 pub fn main() !void {
@@ -197,36 +26,29 @@ pub fn main() !void {
     defer dbus.deinit();
 
     const uri = try dbus.getScreenshotURI();
-    std.log.info("uri: {s}", .{uri});
+    std.log.info("Screenshot URI: {s}", .{uri});
 
-    var state = State{
-        .allocator = allocator,
-        .outputs = std.ArrayList(*Output).empty,
-    };
-    defer state.outputs.deinit(allocator);
+    var state = AppState.init(allocator);
+    defer state.deinit();
 
     var image_width: c_int = undefined;
     var image_height: c_int = undefined;
     var channels: c_int = undefined;
 
     const uri_str = std.mem.span(uri);
-    const file_path = uri_str[7..];
+    const file_path = uri_str[7..]; // Remove "file://" prefix
 
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const path_z = try std.fmt.bufPrintZ(&path_buf, "{s}", .{file_path});
 
-    state.image = c.stbi_load(path_z.ptr, &image_width, &image_height, &channels, 4);
-    if (state.image == null) {
+    const image = c.stbi_load(path_z.ptr, &image_width, &image_height, &channels, 4);
+    if (image == null) {
         return error.ImageLoadFailed;
     }
 
-    std.debug.print("Loaded screenshot: {}x{}\n", .{ image_width, image_height });
-
-    state.image_width = @intCast(image_width);
-    state.image_height = @intCast(image_height);
-
+    // Convert RGBA to BGRA for Cairo
     const pixel_count: usize = @intCast(image_width * image_height);
-    const img_bytes: [*]u8 = @ptrCast(state.image);
+    const img_bytes: [*]u8 = @ptrCast(image);
     for (0..pixel_count) |i| {
         const idx = i * 4;
         const temp = img_bytes[idx];
@@ -234,63 +56,53 @@ pub fn main() !void {
         img_bytes[idx + 2] = temp;
     }
 
-    var display = try wl.Display.connect(null);
-    defer display.disconnect();
+    state.canvas.setImage(image, image_width, image_height);
+    std.log.info("Loaded image: {}x{}", .{ image_width, image_height });
 
-    state.display = display;
+    state.display = try wl.Display.connect(null);
+    const display = state.display.?;
 
-    const registry = try display.getRegistry();
-    defer registry.destroy();
+    state.registry = try display.getRegistry();
+    state.registry.?.setListener(*AppState, registryListener, &state);
+    _ = display.roundtrip();
 
-    registry.setListener(*State, registryListener, &state);
-
-    if (display.roundtrip() != .SUCCESS) {
-        return error.RoundTripFailed;
+    if (state.compositor == null or state.shm == null or state.layer_shell == null) {
+        return error.MissingWaylandProtocols;
     }
 
-    std.log.info("Wayland connection established", .{});
-
     for (state.outputs.items) |output| {
-        output.surface = try state.wl_compositor.?.createSurface();
-
-        output.layer_surface = try state.zwlr_layer_shell.?.getLayerSurface(
+        output.state = &state;
+        output.surface = try state.compositor.?.createSurface();
+        output.layer_surface = try state.layer_shell.?.getLayerSurface(
             output.surface.?,
             output.wl_output,
             .overlay,
-            "screenshot-tool",
+            "screenshot",
         );
 
         output.layer_surface.?.setListener(*Output, layerSurfaceListener, output);
         output.layer_surface.?.setSize(0, 0);
         output.layer_surface.?.setAnchor(.{ .top = true, .bottom = true, .left = true, .right = true });
-        output.layer_surface.?.setKeyboardInteractivity(.exclusive);
         output.layer_surface.?.setExclusiveZone(-1);
+        output.layer_surface.?.setKeyboardInteractivity(.exclusive);
 
         output.surface.?.commit();
     }
 
-    if (display.roundtrip() != .SUCCESS) {
-        return error.RoundTripFailed;
-    }
+    _ = display.roundtrip();
 
     while (true) {
         _ = display.dispatch();
     }
 }
 
-fn setAllOutputsDirty(state: *State) void {
-    for (state.outputs.items) |output| {
-        output.setOutputDirty();
-    }
-}
-
-fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *State) void {
+fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *AppState) void {
     switch (event) {
         .global => |global| {
-            const event_str = std.meta.stringToEnum(EventInterfaces, mem.span(global.interface)) orelse return;
+            const event_str = std.meta.stringToEnum(EventInterfaces, std.mem.span(global.interface)) orelse return;
             switch (event_str) {
                 .wl_compositor => {
-                    state.wl_compositor = registry.bind(
+                    state.compositor = registry.bind(
                         global.name,
                         wl.Compositor,
                         wl.Compositor.generated_version,
@@ -298,24 +110,16 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *St
                     std.log.info("Got compositor", .{});
                 },
                 .wl_output => {
-                    const wl_output = registry.bind(
-                        global.name,
-                        wl.Output,
-                        wl.Output.generated_version,
-                    ) catch @panic("Failed to bind wl_output");
+                    const output = state.allocator.create(Output) catch return;
+                    output.* = .{};
+                    output.wl_output = registry.bind(global.name, wl.Output, 3) catch return;
+                    output.wl_output.?.setListener(*Output, outputListener, output);
+                    state.outputs.append(state.allocator, output) catch return;
 
-                    const output = state.allocator.create(Output) catch @panic("OOM");
-                    output.* = .{
-                        .wl_output = wl_output,
-                        .state = state,
-                    };
-                    state.outputs.append(state.allocator, output) catch @panic("OOM");
-
-                    wl_output.setListener(*Output, outputListener, output);
                     std.log.info("Got wl_output", .{});
                 },
                 .wl_shm => {
-                    state.wl_shm = registry.bind(
+                    state.shm = registry.bind(
                         global.name,
                         wl.Shm,
                         wl.Shm.generated_version,
@@ -323,16 +127,16 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *St
                     std.log.info("Got wl_shm", .{});
                 },
                 .wl_seat => {
-                    state.wl_seat = registry.bind(
+                    state.seat = registry.bind(
                         global.name,
                         wl.Seat,
                         wl.Seat.generated_version,
                     ) catch @panic("Failed to bind wl_seat");
-                    state.wl_seat.?.setListener(*State, seatListener, state);
+                    state.seat.?.setListener(*AppState, seatListener, state);
                     std.log.info("Got wl_seat", .{});
                 },
                 .zwlr_layer_shell_v1 => {
-                    state.zwlr_layer_shell = registry.bind(
+                    state.layer_shell = registry.bind(
                         global.name,
                         zwlr.LayerShellV1,
                         zwlr.LayerShellV1.generated_version,
@@ -345,11 +149,14 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *St
     }
 }
 
-fn outputListener(_: *wl.Output, event: wl.Output.Event, output: *Output) void {
+fn outputListener(output_wl: *wl.Output, event: wl.Output.Event, output: *Output) void {
+    _ = output_wl;
     switch (event) {
-        .geometry => |geom| {
-            output.geometry.x = geom.x;
-            output.geometry.y = geom.y;
+        .geometry => |geo| {
+            output.geometry.x = geo.x;
+            output.geometry.y = geo.y;
+            output.geometry.width = geo.physical_width;
+            output.geometry.height = geo.physical_height;
         },
         .mode => |mode| {
             if (mode.flags.current) {
@@ -383,18 +190,18 @@ fn layerSurfaceListener(layer_surface: *zwlr.LayerSurfaceV1, event: zwlr.LayerSu
     }
 }
 
-fn seatListener(seat: *wl.Seat, event: wl.Seat.Event, state: *State) void {
+fn seatListener(seat: *wl.Seat, event: wl.Seat.Event, state: *AppState) void {
     switch (event) {
         .capabilities => |caps| {
             if (caps.capabilities.keyboard) {
-                state.wl_keyboard = seat.getKeyboard() catch return;
-                state.wl_keyboard.?.setListener(*State, keyboardListener, state);
+                state.keyboard = seat.getKeyboard() catch return;
+                state.keyboard.?.setListener(*AppState, keyboardListener, state);
                 std.log.info("Keyboard capability available", .{});
             }
 
             if (caps.capabilities.pointer) {
-                state.wl_pointer = seat.getPointer() catch return;
-                state.wl_pointer.?.setListener(*State, pointerListener, state);
+                state.pointer = seat.getPointer() catch return;
+                state.pointer.?.setListener(*AppState, pointerListener, state);
                 std.log.info("Pointer capability available", .{});
             }
         },
@@ -402,97 +209,72 @@ fn seatListener(seat: *wl.Seat, event: wl.Seat.Event, state: *State) void {
     }
 }
 
-fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *State) void {
+fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *AppState) void {
     switch (event) {
         .key => |key| {
             if (key.state == .pressed) {
-                if (key.key == 1) { // ESC
-                    std.debug.print("ESC pressed, exiting\n", .{});
-                    std.process.exit(0);
-                } else if (key.key == 28) { // ENTER
-                    if (state.has_last_selection) {
-                        std.debug.print("{d},{d} {d}x{d}\n", .{
-                            state.last_selection_x,
-                            state.last_selection_y,
-                            state.last_selection_width,
-                            state.last_selection_height,
-                        });
-                        std.process.exit(0);
-                    }
+                switch (key.key) {
+                    1 => std.process.exit(0), // ESC
+                    28 => handleEnter(state), // ENTER
+                    // Tool shortcuts
+                    31 => state.setTool(.selection), // 's' key
+                    30 => state.setTool(.draw_arrow), // 'a' key
+                    19 => state.setTool(.draw_rectangle), // 'r' key
+                    46 => state.setTool(.draw_circle), // 'c' key
+                    38 => state.setTool(.draw_line), // 'l' key
+                    20 => state.setTool(.draw_text), // 't' key
+                    else => {},
                 }
+                state.setAllOutputsDirty();
             }
         },
         else => {},
     }
 }
 
-fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *State) void {
+fn handleEnter(state: *AppState) void {
+    if (state.canvas.selection) |sel| {
+        std.debug.print("{d},{d} {d}x{d}\n", .{
+            sel.x,
+            sel.y,
+            sel.width,
+            sel.height,
+        });
+        std.process.exit(0);
+    }
+}
+
+fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *AppState) void {
     switch (event) {
         .enter => |enter| {
             state.pointer_x = @intCast(enter.surface_x.toInt());
             state.pointer_y = @intCast(enter.surface_y.toInt());
         },
         .motion => |motion| {
-            const old_x = state.pointer_x;
-            const old_y = state.pointer_y;
             state.pointer_x = @intCast(motion.surface_x.toInt());
             state.pointer_y = @intCast(motion.surface_y.toInt());
+            state.current_tool.onPointerMove(&state.canvas, state.pointer_x, state.pointer_y);
 
-            switch (state.interaction_mode) {
-                .selecting => {
-                    setAllOutputsDirty(state);
-                },
-                .moving => {
-                    const new_x = state.pointer_x - state.drag_offset_x;
-                    const new_y = state.pointer_y - state.drag_offset_y;
-
-                    state.last_selection_x = clampToBounds(new_x, 0, state.image_width - state.last_selection_width);
-                    state.last_selection_y = clampToBounds(new_y, 0, state.image_height - state.last_selection_height);
-
-                    setAllOutputsDirty(state);
-                },
-                .resizing_nw, .resizing_ne, .resizing_sw, .resizing_se, .resizing_n, .resizing_s, .resizing_e, .resizing_w => {
-                    state.handleResize(old_x, old_y);
-                    setAllOutputsDirty(state);
-                },
-                else => {
-                    const handle = state.getHandleAtPoint(state.pointer_x, state.pointer_y);
-                    if (handle == null or handle.? == .move) {
-                        state.handle_resize = null;
-                        return;
-                    }
-
-                    switch (handle.?) {
-                        .n => {
-                            state.handle_resize = .n;
-                        },
-                        .e => {
-                            state.handle_resize = .e;
-                        },
-                        .s => {
-                            state.handle_resize = .s;
-                        },
-                        .w => {
-                            state.handle_resize = .w;
-                        },
-                        .ne => {
-                            state.handle_resize = .ne;
-                        },
-                        .se => {
-                            state.handle_resize = .se;
-                        },
-                        .nw => {
-                            state.handle_resize = .nw;
-                        },
-                        .sw => {
-                            state.handle_resize = .sw;
-                        },
-                        else => {},
-                    }
-                },
+            if (state.current_tool == .selection) {
+                const sel_tool = &state.current_tool.selection;
+                if (sel_tool.is_selecting or
+                    (state.canvas.selection != null and state.canvas.selection.?.interaction != .none))
+                {
+                    state.setAllOutputsDirty();
+                }
+            } else {
+                const is_drawing = switch (state.current_tool) {
+                    .arrow => |tool| tool.is_drawing,
+                    .rectangle => |tool| tool.is_drawing,
+                    .circle => |tool| tool.is_drawing,
+                    .line => |tool| tool.is_drawing,
+                    else => false,
+                };
+                if (is_drawing) {
+                    state.setAllOutputsDirty();
+                }
             }
         },
-
         .button => |button| {
             if (button.button != 0x110) { // BTN_LEFT
                 return;
@@ -500,83 +282,17 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *State) void 
 
             switch (button.state) {
                 .pressed => {
-                    if (state.has_last_selection) {
-                        const handle = state.getHandleAtPoint(state.pointer_x, state.pointer_y);
-
-                        if (handle) |h| {
-                            switch (h) {
-                                .move => {
-                                    state.interaction_mode = .moving;
-                                    state.drag_offset_x = state.pointer_x - state.last_selection_x;
-                                    state.drag_offset_y = state.pointer_y - state.last_selection_y;
-                                },
-                                .nw => state.interaction_mode = .resizing_nw,
-                                .ne => state.interaction_mode = .resizing_ne,
-                                .sw => state.interaction_mode = .resizing_sw,
-                                .se => state.interaction_mode = .resizing_se,
-                                .n => state.interaction_mode = .resizing_n,
-                                .s => state.interaction_mode = .resizing_s,
-                                .e => state.interaction_mode = .resizing_e,
-                                .w => state.interaction_mode = .resizing_w,
-                            }
-                        } else {
-                            state.interaction_mode = .selecting;
-                            state.has_last_selection = false;
-                            state.anchor_x = state.pointer_x;
-                            state.anchor_y = state.pointer_y;
-                        }
-                    } else {
-                        state.interaction_mode = .selecting;
-                        state.anchor_x = state.pointer_x;
-                        state.anchor_y = state.pointer_y;
-                    }
+                    state.current_tool.onPointerPress(&state.canvas, state.pointer_x, state.pointer_y);
                 },
                 .released => {
-                    switch (state.interaction_mode) {
-                        .selecting => {
-                            const x = @min(state.anchor_x, state.pointer_x);
-                            const y = @min(state.anchor_y, state.pointer_y);
-                            const w = @abs(state.pointer_x - state.anchor_x) + 1;
-                            const h = @abs(state.pointer_y - state.anchor_y) + 1;
-
-                            if (w > 1 and h > 1) {
-                                state.has_last_selection = true;
-                                state.last_selection_x = x;
-                                state.last_selection_y = y;
-                                state.last_selection_width = @intCast(w);
-                                state.last_selection_height = @intCast(h);
-                                std.log.info("Selection: {d},{d} {d}x{d}", .{ x, y, w, h });
-                            }
-                        },
-                        .moving, .resizing_nw, .resizing_ne, .resizing_sw, .resizing_se, .resizing_n, .resizing_s, .resizing_e, .resizing_w => {
-                            std.log.info("Resized/moved to: {d},{d} {d}x{d}", .{
-                                state.last_selection_x,
-                                state.last_selection_y,
-                                state.last_selection_width,
-                                state.last_selection_height,
-                            });
-                        },
-                        else => {},
-                    }
-
-                    state.interaction_mode = .none;
+                    state.current_tool.onPointerRelease(&state.canvas, state.pointer_x, state.pointer_y);
                 },
                 else => {},
             }
 
-            setAllOutputsDirty(state);
+            state.setAllOutputsDirty();
         },
         .frame => {},
         else => {},
     }
-}
-
-fn clampToBounds(value: i32, min: i32, max: i32) i32 {
-    return @max(min, @min(max, value));
-}
-
-fn isPointInHandle(px: i32, py: i32, hx: i32, hy: i32) bool {
-    const half: i32 = @divTrunc(HANDLE_SIZE, 2);
-    return px >= hx - half and px < hx + half and
-        py >= hy - half and py < hy + half;
 }
