@@ -62,4 +62,29 @@ pub const Tool = union(ToolType) {
             inline else => |*tool| tool.getCursor(canvas, x, y),
         };
     }
+
+    pub fn increaseThickness(self: *Tool, value: f64) void {
+        std.log.debug("tool increase", .{});
+        switch (self.*) {
+            .selection => {},
+            .text => {},
+            .arrow => |*tool| {
+                std.log.debug("arrow tool increase", .{});
+                tool.increaseThickness(value);
+            },
+            else => {},
+        }
+    }
+
+    pub fn decreaseThickness(self: *Tool, value: f64) void {
+        switch (self.*) {
+            .selection => {},
+            .text => {},
+            .arrow => |*tool| {
+                std.log.debug("arrow tool increase", .{});
+                tool.decreaseThickness(value);
+            },
+            else => {},
+        }
+    }
 };

@@ -12,6 +12,7 @@ pub const RectangleTool = struct {
     current_x: i32 = 0,
     current_y: i32 = 0,
     is_drawing: bool = false,
+    thickness: f64 = 2.0,
 
     pub fn init() RectangleTool {
         return .{};
@@ -47,7 +48,7 @@ pub const RectangleTool = struct {
                 .width = @intCast(rect_w),
                 .height = @intCast(rect_h),
                 .fill = false,
-                .thickness = 2.0,
+                .thickness = self.thickness,
             };
 
             canvas.addElement(Element{ .rectangle = rect }) catch {
@@ -73,7 +74,7 @@ pub const RectangleTool = struct {
                 .width = @intCast(rect_w),
                 .height = @intCast(rect_h),
                 .fill = false,
-                .thickness = 2.0,
+                .thickness = self.thickness,
             };
             preview.render(cr, offset_x, offset_y);
         }
@@ -81,5 +82,13 @@ pub const RectangleTool = struct {
 
     pub fn getCursor(_: *const RectangleTool, _: *const Canvas, _: i32, _: i32) CursorType {
         return .crosshair;
+    }
+
+    pub fn increaseThickness(self: *RectangleTool, value: f64) void {
+        self.thickness = @max(20.0, self.thickness + value);
+    }
+
+    pub fn decreaseThickness(self: *RectangleTool, value: f64) void {
+        self.thickness = @min(2.0, self.thickness - value);
     }
 };

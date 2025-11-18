@@ -12,6 +12,7 @@ pub const LineTool = struct {
     current_x: i32 = 0,
     current_y: i32 = 0,
     is_drawing: bool = false,
+    thickness: f64 = 2.0,
 
     pub fn init() LineTool {
         return .{};
@@ -43,7 +44,7 @@ pub const LineTool = struct {
                 .start_y = self.start_y.?,
                 .end_x = x,
                 .end_y = y,
-                .thickness = 2.0,
+                .thickness = self.thickness,
             };
 
             canvas.addElement(Element{ .line = line }) catch {
@@ -63,7 +64,7 @@ pub const LineTool = struct {
                 .start_y = self.start_y.?,
                 .end_x = self.current_x,
                 .end_y = self.current_y,
-                .thickness = 2.0,
+                .thickness = self.thickness,
             };
             preview.render(cr, offset_x, offset_y);
         }
@@ -71,5 +72,13 @@ pub const LineTool = struct {
 
     pub fn getCursor(_: *const LineTool, _: *const Canvas, _: i32, _: i32) CursorType {
         return .crosshair;
+    }
+
+    pub fn increaseThickness(self: *LineTool, value: f64) void {
+        self.thickness = @max(20.0, self.thickness + value);
+    }
+
+    pub fn decreaseThickness(self: *LineTool, value: f64) void {
+        self.thickness = @min(2.0, self.thickness - value);
     }
 };

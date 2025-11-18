@@ -216,7 +216,6 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *AppState)
                 switch (key.key) {
                     1 => std.process.exit(0), // ESC
                     28 => handleEnter(state), // ENTER
-                    // Tool shortcuts
                     31 => state.setTool(.selection), // 's' key
                     30 => state.setTool(.draw_arrow), // 'a' key
                     19 => state.setTool(.draw_rectangle), // 'r' key
@@ -291,6 +290,25 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *AppState) vo
             }
 
             state.setAllOutputsDirty();
+        },
+        .axis => |axis| {
+            const value = axis.value.toDouble();
+
+            std.log.debug("axis: value={} axis={} tool_mode={}", .{ value, axis.axis, state.tool_mode });
+
+            if (axis.axis != .vertical_scroll) {
+                return;
+            }
+
+            if (state.tool_mode == .selection or state.tool_mode == .draw_text) {
+                return;
+            }
+
+            if (value > 0.0) {
+                state.current_tool.increaseThickness(value);
+            } else {
+                state.current_tool.decreaseThickness(value);
+            }
         },
         .frame => {},
         else => {},

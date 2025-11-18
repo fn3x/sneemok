@@ -12,6 +12,7 @@ pub const CircleTool = struct {
     current_x: i32 = 0,
     current_y: i32 = 0,
     is_drawing: bool = false,
+    thickness: f64 = 2.0,
 
     pub fn init() CircleTool {
         return .{};
@@ -45,7 +46,7 @@ pub const CircleTool = struct {
                 .center_y = self.center_y.?,
                 .radius = radius,
                 .fill = false,
-                .thickness = 2.0,
+                .thickness = self.thickness,
             };
 
             canvas.addElement(Element{ .circle = circle }) catch {
@@ -69,7 +70,7 @@ pub const CircleTool = struct {
                 .center_y = self.center_y.?,
                 .radius = radius,
                 .fill = false,
-                .thickness = 2.0,
+                .thickness = self.thickness,
             };
             preview.render(cr, offset_x, offset_y);
         }
@@ -77,5 +78,13 @@ pub const CircleTool = struct {
 
     pub fn getCursor(_: *const CircleTool, _: *const Canvas, _: i32, _: i32) CursorType {
         return .crosshair;
+    }
+
+    pub fn increaseThickness(self: *CircleTool, value: f64) void {
+        self.thickness = @max(20.0, self.thickness + value);
+    }
+
+    pub fn decreaseThickness(self: *CircleTool, value: f64) void {
+        self.thickness = @min(2.0, self.thickness - value);
     }
 };

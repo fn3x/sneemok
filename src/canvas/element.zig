@@ -73,7 +73,7 @@ pub const ArrowElement = struct {
     end_x: i32,
     end_y: i32,
     color: Color = Color.red,
-    thickness: f32 = 2.0,
+    thickness: f64 = 2.0,
     arrow_size: f32 = 15.0,
 
     pub fn render(self: *const ArrowElement, cr: *c.cairo_t, offset_x: i32, offset_y: i32) void {
@@ -142,7 +142,7 @@ pub const RectElement = struct {
     height: i32,
     color: Color = Color.red,
     fill: bool = false,
-    thickness: f32 = 2.0,
+    thickness: f64 = 2.0,
 
     pub fn render(self: *const RectElement, cr: *c.cairo_t, offset_x: i32, offset_y: i32) void {
         const x: f64 = @floatFromInt(self.x - offset_x);
@@ -177,7 +177,7 @@ pub const CircleElement = struct {
     radius: i32,
     color: Color = Color.red,
     fill: bool = false,
-    thickness: f32 = 2.0,
+    thickness: f64 = 2.0,
 
     pub fn render(self: *const CircleElement, cr: *c.cairo_t, offset_x: i32, offset_y: i32) void {
         const cx: f64 = @floatFromInt(self.center_x - offset_x);
@@ -217,7 +217,7 @@ pub const LineElement = struct {
     end_x: i32,
     end_y: i32,
     color: Color = Color.red,
-    thickness: f32 = 2.0,
+    thickness: f64 = 2.0,
 
     pub fn render(self: *const LineElement, cr: *c.cairo_t, offset_x: i32, offset_y: i32) void {
         const sx: f64 = @floatFromInt(self.start_x - offset_x);
