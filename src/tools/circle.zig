@@ -81,10 +81,10 @@ pub const CircleTool = struct {
     }
 
     pub fn increaseThickness(self: *CircleTool, value: f64) void {
-        self.thickness = @max(20.0, self.thickness + value);
+        self.thickness = @min(10.0, self.thickness + value);
     }
 
     pub fn decreaseThickness(self: *CircleTool, value: f64) void {
-        self.thickness = @min(2.0, self.thickness - value);
+        self.thickness = @max(2.0, self.thickness - value);
     }
 };

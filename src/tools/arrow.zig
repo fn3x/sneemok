@@ -77,12 +77,10 @@ pub const ArrowTool = struct {
     }
 
     pub fn increaseThickness(self: *ArrowTool, value: f64) void {
-        std.log.debug("increasing thickness", .{});
-        self.thickness = @max(20.0, self.thickness + value);
+        self.thickness = @min(20.0, self.thickness + value);
     }
 
     pub fn decreaseThickness(self: *ArrowTool, value: f64) void {
-        std.log.debug("decreasing thickness", .{});
-        self.thickness = @min(2.0, self.thickness - value);
+        self.thickness = @max(2.0, self.thickness - value);
     }
 };

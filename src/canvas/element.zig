@@ -107,7 +107,7 @@ pub const ArrowElement = struct {
         const dx = self.end_x - self.start_x;
         const dy = self.end_y - self.start_y;
         const length_sq = dx * dx + dy * dy;
-        
+
         if (length_sq == 0) {
             const dist_x = x - self.start_x;
             const dist_y = y - self.start_y;
@@ -117,10 +117,10 @@ pub const ArrowElement = struct {
         const px = x - self.start_x;
         const py = y - self.start_y;
         const t = @max(0, @min(length_sq, px * dx + py * dy)) / length_sq;
-        
+
         const proj_x = self.start_x + @as(i32, @intFromFloat(@as(f32, @floatFromInt(t * dx))));
         const proj_y = self.start_y + @as(i32, @intFromFloat(@as(f32, @floatFromInt(t * dy))));
-        
+
         const dist_x = x - proj_x;
         const dist_y = y - proj_y;
         return (dist_x * dist_x + dist_y * dist_y) < 25;
@@ -236,7 +236,7 @@ pub const LineElement = struct {
         const dx = self.end_x - self.start_x;
         const dy = self.end_y - self.start_y;
         const length_sq = dx * dx + dy * dy;
-        
+
         if (length_sq == 0) {
             const dist_x = x - self.start_x;
             const dist_y = y - self.start_y;
@@ -246,10 +246,10 @@ pub const LineElement = struct {
         const px = x - self.start_x;
         const py = y - self.start_y;
         const t = @max(0, @min(length_sq, px * dx + py * dy)) / length_sq;
-        
+
         const proj_x = self.start_x + @as(i32, @intFromFloat(@as(f32, @floatFromInt(t * dx))));
         const proj_y = self.start_y + @as(i32, @intFromFloat(@as(f32, @floatFromInt(t * dy))));
-        
+
         const dist_x = x - proj_x;
         const dist_y = y - proj_y;
         return (dist_x * dist_x + dist_y * dist_y) < 25;

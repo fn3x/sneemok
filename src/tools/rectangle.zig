@@ -85,10 +85,10 @@ pub const RectangleTool = struct {
     }
 
     pub fn increaseThickness(self: *RectangleTool, value: f64) void {
-        self.thickness = @max(20.0, self.thickness + value);
+        self.thickness = @min(20.0, self.thickness + value);
     }
 
     pub fn decreaseThickness(self: *RectangleTool, value: f64) void {
-        self.thickness = @min(2.0, self.thickness - value);
+        self.thickness = @max(2.0, self.thickness - value);
     }
 };

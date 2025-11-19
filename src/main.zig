@@ -304,10 +304,10 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *AppState) vo
                 return;
             }
 
-            if (value > 0.0) {
-                state.current_tool.increaseThickness(value);
+            if (value < 0.0) {
+                state.current_tool.increaseThickness(2);
             } else {
-                state.current_tool.decreaseThickness(value);
+                state.current_tool.decreaseThickness(2);
             }
         },
         .frame => {},

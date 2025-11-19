@@ -75,10 +75,10 @@ pub const LineTool = struct {
     }
 
     pub fn increaseThickness(self: *LineTool, value: f64) void {
-        self.thickness = @max(20.0, self.thickness + value);
+        self.thickness = @min(20.0, self.thickness + value);
     }
 
     pub fn decreaseThickness(self: *LineTool, value: f64) void {
-        self.thickness = @min(2.0, self.thickness - value);
+        self.thickness = @max(2.0, self.thickness - value);
     }
 };

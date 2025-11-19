@@ -72,7 +72,18 @@ pub const Tool = union(ToolType) {
                 std.log.debug("arrow tool increase", .{});
                 tool.increaseThickness(value);
             },
-            else => {},
+            .line => |*tool| {
+                std.log.debug("line tool increase", .{});
+                tool.increaseThickness(value);
+            },
+            .circle => |*tool| {
+                std.log.debug("circle tool increase", .{});
+                tool.increaseThickness(value);
+            },
+            .rectangle => |*tool| {
+                std.log.debug("rectangle tool increase", .{});
+                tool.increaseThickness(value);
+            },
         }
     }
 
@@ -81,10 +92,21 @@ pub const Tool = union(ToolType) {
             .selection => {},
             .text => {},
             .arrow => |*tool| {
-                std.log.debug("arrow tool increase", .{});
+                std.log.debug("arrow tool decrease", .{});
                 tool.decreaseThickness(value);
             },
-            else => {},
+            .line => |*tool| {
+                std.log.debug("line tool decrease", .{});
+                tool.decreaseThickness(value);
+            },
+            .circle => |*tool| {
+                std.log.debug("circle tool decrease", .{});
+                tool.decreaseThickness(value);
+            },
+            .rectangle => |*tool| {
+                std.log.debug("rectangle tool decrease", .{});
+                tool.decreaseThickness(value);
+            },
         }
     }
 };
