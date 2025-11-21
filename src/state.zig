@@ -45,6 +45,7 @@ pub const AppState = struct {
     keyboard: ?*wl.Keyboard = null,
     pointer: ?*wl.Pointer = null,
     layer_shell: ?*zwlr.LayerShellV1 = null,
+    data_device_manager: ?*wl.DataDeviceManager = null,
 
     outputs: std.ArrayList(*Output),
 

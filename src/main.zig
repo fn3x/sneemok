@@ -15,6 +15,7 @@ const EventInterfaces = enum {
     wl_shm,
     wl_seat,
     zwlr_layer_shell_v1,
+    wl_data_device_manager,
 };
 
 pub fn main() !void {
@@ -142,6 +143,14 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *Ap
                         zwlr.LayerShellV1.generated_version,
                     ) catch @panic("Failed to bind zwlr_layer_shell_v1");
                     std.log.info("Got zwlr_layer_shell_v1", .{});
+                },
+                .wl_data_device_manager => {
+                    state.data_device_manager = registry.bind(
+                        global.name,
+                        wl.DataDeviceManager,
+                        wl.DataDeviceManager.generated_version,
+                    ) catch @panic("Failed to bind wl_data_device_manager");
+                    std.log.info("Got wl_data_device_manager", .{});
                 },
             }
         },
