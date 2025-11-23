@@ -2,6 +2,10 @@
 
 Wayland screenshot annotation tool in Zig.
 
+The main repository is on [codeberg](https://codeberg.org/fn3x/sneemok), which is where the issue tracker may be found and where contributions are accepted.
+
+Read-only mirrors exist on [github](https://github.com/fn3x/sneemok).
+
 ## Build
 
 ```bash
