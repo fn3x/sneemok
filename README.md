@@ -9,9 +9,9 @@ zig build
 ```
 
 **Dependencies:**
-- Wayland
-- Cairo
-- wl-clipboard (optional)
+- wl-roots compositor
+- cairo (usually included in most Linux distributions)
+- wl-clipboard (optional but recommended)
 
 ## Usage
 
@@ -21,14 +21,13 @@ zig build
 
 ### Keys
 
-- `S` - Selection tool
-- `A` - Arrow
-- `R` - Rectangle  
-- `C` - Circle
-- `L` - Line
+- `s` - Selection tool
+- `a` - Arrow
+- `r` - Rectangle  
+- `c` - Circle
+- `l` - Line
 - `Ctrl+C` - Copy to clipboard
-- `Enter` - Print coordinates
-- `ESC` - Exit
+- `ESC` - Change current tool to selection or exit
 - `Mouse wheel up` - Increase thickness of the current tool
 - `Mouse wheel down` - Decrease thickness of the current tool
 
