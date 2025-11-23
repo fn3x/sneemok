@@ -64,24 +64,19 @@ pub const Tool = union(ToolType) {
     }
 
     pub fn increaseThickness(self: *Tool, value: f64) void {
-        std.log.debug("tool increase", .{});
         switch (self.*) {
             .selection => {},
             .text => {},
             .arrow => |*tool| {
-                std.log.debug("arrow tool increase", .{});
                 tool.increaseThickness(value);
             },
             .line => |*tool| {
-                std.log.debug("line tool increase", .{});
                 tool.increaseThickness(value);
             },
             .circle => |*tool| {
-                std.log.debug("circle tool increase", .{});
                 tool.increaseThickness(value);
             },
             .rectangle => |*tool| {
-                std.log.debug("rectangle tool increase", .{});
                 tool.increaseThickness(value);
             },
         }
@@ -92,19 +87,15 @@ pub const Tool = union(ToolType) {
             .selection => {},
             .text => {},
             .arrow => |*tool| {
-                std.log.debug("arrow tool decrease", .{});
                 tool.decreaseThickness(value);
             },
             .line => |*tool| {
-                std.log.debug("line tool decrease", .{});
                 tool.decreaseThickness(value);
             },
             .circle => |*tool| {
-                std.log.debug("circle tool decrease", .{});
                 tool.decreaseThickness(value);
             },
             .rectangle => |*tool| {
-                std.log.debug("rectangle tool decrease", .{});
                 tool.decreaseThickness(value);
             },
         }
