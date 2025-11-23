@@ -1,6 +1,6 @@
 .{
     .name = .sneemok,
-    .version = "0.0.0",
+    .version = "0.1.0",
     .fingerprint = 0x573213255d073bb2,
     .minimum_zig_version = "0.15.1",
     .dependencies = .{
