@@ -3,17 +3,21 @@
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
   };
 
-  outputs =
-    { self, nixpkgs }:
+  outputs = { self, nixpkgs }:
     let
-      pkgs = nixpkgs.legacyPackages.x86_64-linux;
+      system = "x86_64-linux";
+      pkgs = nixpkgs.legacyPackages.${system};
     in
-    {
-      devShells.x86_64-linux.default = pkgs.mkShell {
-        packages = with pkgs; [
-          zig
-        ];
+      {
+      packages.${system}.default = pkgs.callPackage ./nix/package.nix { };
 
+      apps.${system}.default = {
+        type = "app";
+        program = "${self.packages.${system}.default}/bin/sneemok";
+      };
+
+      devShells.${system}.default = pkgs.mkShell {
+        packages = with pkgs; [ zig ];
         buildInputs = with pkgs; [
           stb
           wayland-scanner
@@ -28,5 +32,45 @@
           cairo
         ];
       };
+
+      nixosModules.default = { config, lib, pkgs, ... }:
+        with lib;
+        let
+          cfg = config.programs.sneemok;
+        in
+          {
+          options.programs.sneemok = {
+            enable = mkEnableOption "sneemok screenshot tool";
+            package = mkOption {
+              type = types.package;
+              default = self.packages.${system}.default;
+              description = "The sneemok package to use";
+            };
+          };
+
+          config = mkIf cfg.enable {
+            environment.systemPackages = [ cfg.package ];
+          };
+        };
+
+      homeManagerModules.default = { config, lib, pkgs, ... }:
+        with lib;
+        let
+          cfg = config.programs.sneemok;
+        in
+          {
+          options.programs.sneemok = {
+            enable = mkEnableOption "sneemok screenshot tool";
+            package = mkOption {
+              type = types.package;
+              default = self.packages.${system}.default;
+              description = "The sneemok package to use";
+            };
+          };
+
+          config = mkIf cfg.enable {
+            home.packages = [ cfg.package ];
+          };
+        };
     };
 }

@@ -1,24 +1,27 @@
 { lib
 , stdenv
+, callPackage
 , zig
 , stb
+, wayland
 , wayland-scanner
 , wayland-protocols
-, wayland
+, wlr-protocols
 , pkg-config
+, cairo
 , dbus
 , libxkbcommon
 , wlroots
-, wlr-protocols
-, wl-clipboard
-, cairo
 }:
-stdenv.mkDerivation {
-  name = "sneemok";
+
+stdenv.mkDerivation (finalAttrs: {
   pname = "sneemok";
   version = "0.1.0";
 
   src = ../.;
+
+  # Fetch Zig dependencies from build.zig.zon.nix
+  deps = callPackage ../build.zig.zon.nix { name = "sneemok-deps"; };
 
   nativeBuildInputs = [ zig ];
 
@@ -32,25 +35,31 @@ stdenv.mkDerivation {
     libxkbcommon
     wlroots
     wlr-protocols
-    wl-clipboard
     cairo
   ];
 
+  dontConfigure = true;
+
+  zigBuildFlags = [
+    "--system"
+    "${finalAttrs.deps}"
+    "-Doptimize=ReleaseSafe"
+  ];
+
   buildPhase = ''
+    runHook preBuild
     export HOME=$TMPDIR
-    zig build -Doptimize=ReleaseSafe
+    zig build $zigBuildFlags --prefix $out
+    runHook postBuild
   '';
 
-  installPhase = ''
-    mkdir -p $out/bin
-    cp zig-out/bin/sneemok $out/bin/
-  '';
+  dontInstall = true;
 
   meta = with lib; {
     description = "Wayland screenshot annotation tool";
-    homepage = "https://codeberg.org/fn3x/sneemok";
     license = licenses.mit;
     platforms = platforms.linux;
     maintainers = [ fn3x ];
   };
-}
+})
+

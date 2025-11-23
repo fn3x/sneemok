@@ -1,4 +1,4 @@
-# default.nix - for backwards compatibility with nix-build
+# shell.nix - for backwards compatibility with nix-shell
 (import (
   fetchTarball {
     url = "https://github.com/edolstra/flake-compat/archive/master.tar.gz";
@@ -6,4 +6,4 @@
   }
 ) {
   src = ./.;
-}).defaultNix
+}).shellNix
