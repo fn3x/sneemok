@@ -6,8 +6,92 @@ The main repository is on [codeberg](https://codeberg.org/fn3x/sneemok), which i
 
 Read-only mirrors exist on [github](https://github.com/fn3x/sneemok).
 
+## Installation
+
+### NixOS (system-wide)
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    sneemok.url = "github:fn3x/sneemok";
+  };
+
+  outputs = { nixpkgs, sneemok, ... }: {
+    nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
+      modules = [
+        sneemok.nixosModules.default
+        {
+          programs.sneemok.enable = true;
+        }
+      ];
+    };
+  };
+}
+```
+
+### Home Manager
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    home-manager.url = "github:nix-community/home-manager";
+    sneemok.url = "github:fn3x/sneemok";
+  };
+
+  outputs = { nixpkgs, home-manager, sneemok, ... }: {
+    homeConfigurations.youruser = home-manager.lib.homeManagerConfiguration {
+      modules = [
+        sneemok.homeManagerModules.default
+        {
+          programs.sneemok.enable = true;
+        }
+      ];
+    };
+  };
+}
+```
+
+### Direct install (no module)
+
+```nix
+{
+  inputs.sneemok.url = "github:fn3x/sneemok";
+  # Or local: sneemok.url = "path:/path/to/sneemok";
+
+  outputs = { sneemok, ... }: {
+    # NixOS
+    environment.systemPackages = [ sneemok.packages.x86_64-linux.default ];
+    
+    # Or Home Manager
+    home.packages = [ sneemok.packages.x86_64-linux.default ];
+  };
+}
+```
+
+### Build from source
+
+```bash
+# Clone repo
+git clone https://github.com/fn3x/sneemok
+cd sneemok
+
+# Build
+nix build
+
+# Run
+./result/bin/sneemok
+```
+
 ## Build
 
+**With Nix:**
+```bash
+nix build
+```
+
+**Without Nix:**
 ```bash
 zig build
 ```
@@ -57,3 +141,7 @@ src/
 **Format:** BGRA internally, RGBA PNG export
 
 **Clipboard:** wl-copy (persistent) or native Wayland (clears on exit)
+
+## License
+
+MIT
