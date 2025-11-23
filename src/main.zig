@@ -249,7 +249,13 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *AppState)
 
             if (key.state == .pressed) {
                 switch (key.key) {
-                    1 => state.running = false, // ESC
+                    1 => { // ESC
+                        if (state.current_tool != .selection) {
+                            state.setTool(.selection);
+                        } else {
+                            state.running = false;
+                        }
+                    },
                     31 => state.setTool(.selection), // 's' key
                     30 => state.setTool(.draw_arrow), // 'a' key
                     19 => state.setTool(.draw_rectangle), // 'r' key
