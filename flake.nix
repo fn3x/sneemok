@@ -24,6 +24,7 @@
           libxkbcommon
           wlroots
           wlr-protocols
+          wl-clipboard
           cairo
         ];
       };
