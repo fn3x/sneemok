@@ -65,6 +65,7 @@ pub fn main() !void {
 
     state.registry = try display.getRegistry();
     state.registry.?.setListener(*AppState, registryListener, &state);
+
     _ = display.roundtrip();
 
     if (state.compositor == null or state.shm == null or state.layer_shell == null) {
@@ -92,7 +93,7 @@ pub fn main() !void {
 
     _ = display.roundtrip();
 
-    while (true) {
+    while (state.running) {
         _ = display.dispatch();
     }
 }
@@ -234,16 +235,21 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *AppState)
             const ctrl_pressed = state.keyboard_modifiers.ctrl;
 
             if (ctrl_pressed and key.key == 46) { // 46 = 'c' key
-                copySelectionToClipboard(state) catch |err| {
-                    std.log.err("Failed to copy: {}", .{err});
+                copySelectionToClipboardPersistent(state) catch |wlcopy_error| {
+                    std.log.warn("wl-copy failed ({}), falling back to native Wayland clipboard", .{wlcopy_error});
+
+                    // Fallback to native Wayland clipboard
+                    copySelectionToClipboard(state) catch |wayland_error| {
+                        std.log.warn("Native Wayland clipboard failed ({})", .{wayland_error});
+                    };
                 };
+                state.running = false;
                 return;
             }
 
             if (key.state == .pressed) {
                 switch (key.key) {
-                    1 => std.process.exit(0), // ESC
-                    28 => handleEnter(state), // ENTER
+                    1 => state.running = false, // ESC
                     31 => state.setTool(.selection), // 's' key
                     30 => state.setTool(.draw_arrow), // 'a' key
                     19 => state.setTool(.draw_rectangle), // 'r' key
@@ -264,18 +270,6 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *AppState)
             };
         },
         else => {},
-    }
-}
-
-fn handleEnter(state: *AppState) void {
-    if (state.canvas.selection) |sel| {
-        std.debug.print("{d},{d} {d}x{d}\n", .{
-            sel.x,
-            sel.y,
-            sel.width,
-            sel.height,
-        });
-        std.process.exit(0);
     }
 }
 
@@ -382,4 +376,25 @@ pub fn copySelectionToClipboard(state: *AppState) !void {
     data_source.offer("image/png");
     data_source.setListener(*AppState, dataSourceListener, state);
     state.data_device.?.setSelection(data_source, state.serial.?);
+}
+
+pub fn copySelectionToClipboardPersistent(state: *AppState) !void {
+    if (state.canvas.selection == null) return;
+
+    const argv = [_][]const u8{ "wl-copy", "--type", "image/png" };
+
+    var child = std.process.Child.init(&argv, state.allocator);
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+
+    try child.spawn();
+
+    if (child.stdin) |stdin| {
+        state.canvas.writeToPngFd(stdin.handle) catch {};
+        stdin.close();
+        child.stdin = null;
+    }
+
+    _ = try child.wait();
 }

@@ -35,6 +35,8 @@ pub const ToolMode = enum {
 };
 
 pub const AppState = struct {
+    running: bool = true,
+
     allocator: std.mem.Allocator,
 
     display: ?*wl.Display = null,
@@ -71,11 +73,27 @@ pub const AppState = struct {
     }
 
     pub fn deinit(self: *AppState) void {
-        self.canvas.deinit();
         for (self.outputs.items) |output| {
+            if (output.layer_surface) |ls| ls.destroy();
+            if (output.surface) |surf| surf.destroy();
+            if (output.wl_output) |wo| wo.release();
             self.allocator.destroy(output);
         }
+
         self.outputs.deinit(self.allocator);
+        self.canvas.deinit();
+
+        if (self.keyboard) |kb| kb.release();
+        if (self.pointer) |ptr| ptr.release();
+        if (self.seat) |seat| seat.release();
+        if (self.data_device) |dd| dd.release();
+        if (self.data_device_manager) |ddm| ddm.destroy();
+
+        if (self.layer_shell) |ls| ls.destroy();
+        if (self.shm) |shm| shm.destroy();
+        if (self.compositor) |comp| comp.destroy();
+        if (self.registry) |reg| reg.destroy();
+        if (self.display) |disp| disp.disconnect();
     }
 
     pub fn setTool(self: *AppState, mode: ToolMode) void {
