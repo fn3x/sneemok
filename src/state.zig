@@ -43,9 +43,13 @@ pub const AppState = struct {
     shm: ?*wl.Shm = null,
     seat: ?*wl.Seat = null,
     keyboard: ?*wl.Keyboard = null,
+    keyboard_modifiers: KeyboardModifiers = .{},
+    serial: ?u32 = null,
     pointer: ?*wl.Pointer = null,
     layer_shell: ?*zwlr.LayerShellV1 = null,
     data_device_manager: ?*wl.DataDeviceManager = null,
+    data_device: ?*wl.DataDevice = null,
+    data_source: ?*wl.DataSource = null,
 
     outputs: std.ArrayList(*Output),
 
@@ -92,4 +96,11 @@ pub const AppState = struct {
             output.setOutputDirty();
         }
     }
+};
+
+pub const KeyboardModifiers = struct {
+    shift: bool = false,
+    ctrl: bool = false,
+    alt: bool = false,
+    super: bool = false,
 };

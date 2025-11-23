@@ -1,4 +1,5 @@
 const std = @import("std");
+const c = @import("../c.zig").c;
 const Element = @import("element.zig").Element;
 
 pub const Canvas = struct {
@@ -46,6 +47,58 @@ pub const Canvas = struct {
             }
         }
         return null;
+    }
+
+    pub fn writeToPngFd(self: *const Canvas, fd: std.posix.fd_t) !void {
+        const sel = self.selection orelse return error.NoSelection;
+
+        const surface = c.cairo_image_surface_create(
+            c.CAIRO_FORMAT_ARGB32,
+            sel.width,
+            sel.height,
+        );
+        defer c.cairo_surface_destroy(surface);
+
+        const cr = c.cairo_create(surface);
+        defer c.cairo_destroy(cr);
+
+        if (self.image) |image| {
+            const img_surface = c.cairo_image_surface_create_for_data(
+                @ptrCast(@constCast(image)),
+                c.CAIRO_FORMAT_ARGB32,
+                self.width,
+                self.height,
+                self.width * 4,
+            );
+            defer c.cairo_surface_destroy(img_surface);
+
+            c.cairo_set_source_surface(cr, img_surface, @floatFromInt(-sel.x), @floatFromInt(-sel.y));
+            c.cairo_paint(cr);
+        }
+
+        for (self.elements.items) |*element| {
+            element.render(cr.?, sel.x, sel.y);
+        }
+
+        const FdWrapper = struct {
+            fd: std.posix.fd_t,
+        };
+
+        var wrapper = FdWrapper{ .fd = fd };
+
+        const result = c.cairo_surface_write_to_png_stream(
+            surface,
+            cairoWriteCallback,
+            @ptrCast(&wrapper),
+        );
+
+        if (result != c.CAIRO_STATUS_SUCCESS) {
+            return error.CairoWriteFailed;
+        }
+    }
+
+    pub fn clearPixels(self: *const Canvas, pixels: *[]u8) void {
+        self.allocator.free(pixels);
     }
 };
 
@@ -192,3 +245,28 @@ pub const Selection = struct {
         return @max(min, @min(max, value));
     }
 };
+
+fn cairoWriteCallback(
+    closure: ?*anyopaque,
+    data: [*c]const u8,
+    length: c_uint,
+) callconv(.c) c.cairo_status_t {
+    const FdWrapper = struct {
+        fd: std.posix.fd_t,
+    };
+
+    const wrapper: *FdWrapper = @ptrCast(@alignCast(closure));
+    const fd = wrapper.fd;
+
+    const slice = data[0..length];
+
+    var written: usize = 0;
+    while (written < slice.len) {
+        const n = std.posix.write(fd, slice[written..]) catch {
+            return c.CAIRO_STATUS_WRITE_ERROR;
+        };
+        written += n;
+    }
+
+    return c.CAIRO_STATUS_SUCCESS;
+}

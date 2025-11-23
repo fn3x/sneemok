@@ -158,8 +158,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *Ap
     }
 }
 
-fn outputListener(output_wl: *wl.Output, event: wl.Output.Event, output: *Output) void {
-    _ = output_wl;
+fn outputListener(_: *wl.Output, event: wl.Output.Event, output: *Output) void {
     switch (event) {
         .geometry => |geo| {
             output.geometry.x = geo.x;
@@ -184,7 +183,7 @@ fn outputListener(output_wl: *wl.Output, event: wl.Output.Event, output: *Output
 fn layerSurfaceListener(layer_surface: *zwlr.LayerSurfaceV1, event: zwlr.LayerSurfaceV1.Event, output: *Output) void {
     switch (event) {
         .configure => |configure| {
-            std.log.debug("Layer surface configured: {}x{}", .{ configure.width, configure.height });
+            std.log.debug("Layer surface configured ({d}): {}x{}", .{ configure.serial, configure.width, configure.height });
             layer_surface.ackConfigure(configure.serial);
 
             output.configured = true;
@@ -206,6 +205,11 @@ fn seatListener(seat: *wl.Seat, event: wl.Seat.Event, state: *AppState) void {
                 state.keyboard = seat.getKeyboard() catch return;
                 state.keyboard.?.setListener(*AppState, keyboardListener, state);
                 std.log.info("Keyboard capability available", .{});
+
+                if (state.data_device_manager) |ddm| {
+                    state.data_device = ddm.getDataDevice(seat) catch @panic("Error on getting wl_data_device");
+                    std.log.info("Created data device", .{});
+                }
             }
 
             if (caps.capabilities.pointer) {
@@ -221,6 +225,21 @@ fn seatListener(seat: *wl.Seat, event: wl.Seat.Event, state: *AppState) void {
 fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *AppState) void {
     switch (event) {
         .key => |key| {
+            state.serial = key.serial;
+
+            if (key.state != .pressed) {
+                return;
+            }
+
+            const ctrl_pressed = state.keyboard_modifiers.ctrl;
+
+            if (ctrl_pressed and key.key == 46) { // 46 = 'c' key
+                copySelectionToClipboard(state) catch |err| {
+                    std.log.err("Failed to copy: {}", .{err});
+                };
+                return;
+            }
+
             if (key.state == .pressed) {
                 switch (key.key) {
                     1 => std.process.exit(0), // ESC
@@ -235,6 +254,14 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *AppState)
                 }
                 state.setAllOutputsDirty();
             }
+        },
+        .modifiers => |mods| {
+            state.keyboard_modifiers = .{
+                .shift = (mods.mods_depressed & 1) != 0,
+                .ctrl = (mods.mods_depressed & 4) != 0,
+                .alt = (mods.mods_depressed & 8) != 0,
+                .super = (mods.mods_depressed & 64) != 0,
+            };
         },
         else => {},
     }
@@ -284,6 +311,8 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *AppState) vo
             }
         },
         .button => |button| {
+            state.serial = button.serial;
+
             if (button.button != 0x110) { // BTN_LEFT
                 return;
             }
@@ -303,8 +332,6 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *AppState) vo
         .axis => |axis| {
             const value = axis.value.toDouble();
 
-            std.log.debug("axis: value={} axis={} tool_mode={}", .{ value, axis.axis, state.tool_mode });
-
             if (axis.axis != .vertical_scroll) {
                 return;
             }
@@ -322,4 +349,37 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *AppState) vo
         .frame => {},
         else => {},
     }
+}
+
+fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, state: *AppState) void {
+    switch (event) {
+        .send => |send| {
+            if (std.mem.eql(u8, std.mem.span(send.mime_type), "image/png")) {
+                defer std.posix.close(send.fd);
+                state.canvas.writeToPngFd(send.fd) catch |err| {
+                    std.log.err("Error on writing selection to png fd {}", .{err});
+                };
+                std.log.debug("wl_data_source::copied to clipboard fd={d}", .{send.fd});
+            }
+        },
+        .cancelled => {
+            std.log.info("wl_data_source::clipboard selection cancelled (replaced by another copy)", .{});
+            data_source.destroy();
+        },
+        else => |ev| {
+            std.log.debug("wl_data_source::event {}", .{ev});
+        },
+    }
+}
+
+pub fn copySelectionToClipboard(state: *AppState) !void {
+    if (state.canvas.selection == null) {
+        return;
+    }
+
+    const data_source = try state.data_device_manager.?.createDataSource();
+
+    data_source.offer("image/png");
+    data_source.setListener(*AppState, dataSourceListener, state);
+    state.data_device.?.setSelection(data_source, state.serial.?);
 }
