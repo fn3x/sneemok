@@ -18,8 +18,8 @@ pub const SelectionTool = struct {
     pub fn onPointerPress(self: *SelectionTool, canvas: *Canvas, x: i32, y: i32) void {
         if (canvas.selection) |*sel| {
             const handle = sel.getHandleAt(x, y);
-            if (handle) |h| {
-                sel.interaction = Selection.handleToInteraction(h);
+            if (handle != .none) {
+                sel.interaction = Selection.handleToInteraction(handle);
                 sel.drag_offset_x = x - sel.x;
                 sel.drag_offset_y = y - sel.y;
                 self.last_pointer_x = x;
@@ -110,6 +110,7 @@ pub const SelectionTool = struct {
                     .s => .resize_s,
                     .e => .resize_e,
                     .w => .resize_w,
+                    .none => .default,
                 };
             }
         }

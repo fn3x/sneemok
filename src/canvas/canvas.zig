@@ -127,6 +127,7 @@ pub const Selection = struct {
     };
 
     pub const HandleType = enum {
+        none,
         move,
         nw,
         ne,
@@ -140,7 +141,7 @@ pub const Selection = struct {
 
     const HANDLE_SIZE: i32 = 15;
 
-    pub fn getHandleAt(self: *const Selection, x: i32, y: i32) ?HandleType {
+    pub fn getHandleAt(self: *const Selection, x: i32, y: i32) HandleType {
         if (isPointInHandle(x, y, self.x, self.y)) return .nw;
         if (isPointInHandle(x, y, self.x + self.width, self.y)) return .ne;
         if (isPointInHandle(x, y, self.x, self.y + self.height)) return .sw;
@@ -153,7 +154,7 @@ pub const Selection = struct {
 
         if (isPointInRect(x, y, self.x, self.y, self.width, self.height)) return .move;
 
-        return null;
+        return .none;
     }
 
     fn isPointInHandle(px: i32, py: i32, hx: i32, hy: i32) bool {
@@ -177,6 +178,7 @@ pub const Selection = struct {
             .s => .resizing_s,
             .e => .resizing_e,
             .w => .resizing_w,
+            .none => .none,
         };
     }
 

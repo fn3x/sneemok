@@ -48,6 +48,8 @@ pub const AppState = struct {
     keyboard_modifiers: KeyboardModifiers = .{},
     serial: ?u32 = null,
     pointer: ?*wl.Pointer = null,
+    cursor_theme: ?*wl.CursorTheme = null,
+    cursor_surface: ?*wl.Surface = null,
     layer_shell: ?*zwlr.LayerShellV1 = null,
     data_device_manager: ?*wl.DataDeviceManager = null,
     data_device: ?*wl.DataDevice = null,
@@ -60,6 +62,7 @@ pub const AppState = struct {
     current_tool: Tool,
     tool_mode: ToolMode = .selection,
 
+    mouse_pressed: bool = false,
     pointer_x: i32 = 0,
     pointer_y: i32 = 0,
 
@@ -85,6 +88,8 @@ pub const AppState = struct {
 
         if (self.keyboard) |kb| kb.release();
         if (self.pointer) |ptr| ptr.release();
+        if (self.cursor_surface) |surface| surface.destroy();
+        if (self.cursor_theme) |theme| theme.destroy();
         if (self.seat) |seat| seat.release();
         if (self.data_device) |dd| dd.release();
         if (self.data_device_manager) |ddm| ddm.destroy();

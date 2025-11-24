@@ -72,6 +72,9 @@ pub fn main() !void {
         return error.MissingWaylandProtocols;
     }
 
+    state.cursor_surface = try state.compositor.?.createSurface();
+    state.cursor_theme = try wl.CursorTheme.load(null, 24, state.shm.?);
+
     for (state.outputs.items) |output| {
         output.state = &state;
         output.surface = try state.compositor.?.createSurface();
@@ -284,11 +287,16 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *AppState) vo
         .enter => |enter| {
             state.pointer_x = @intCast(enter.surface_x.toInt());
             state.pointer_y = @intCast(enter.surface_y.toInt());
+            state.serial = enter.serial;
+
+            setCursor(state, "default");
         },
         .motion => |motion| {
             state.pointer_x = @intCast(motion.surface_x.toInt());
             state.pointer_y = @intCast(motion.surface_y.toInt());
             state.current_tool.onPointerMove(&state.canvas, state.pointer_x, state.pointer_y);
+
+            updateCursorForTool(state);
 
             if (state.current_tool == .selection) {
                 const sel_tool = &state.current_tool.selection;
@@ -319,15 +327,18 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *AppState) vo
 
             switch (button.state) {
                 .pressed => {
+                    state.mouse_pressed = true;
                     state.current_tool.onPointerPress(&state.canvas, state.pointer_x, state.pointer_y);
                 },
                 .released => {
+                    state.mouse_pressed = false;
                     state.current_tool.onPointerRelease(&state.canvas, state.pointer_x, state.pointer_y);
                 },
                 else => {},
             }
 
             state.setAllOutputsDirty();
+            updateCursorForTool(state);
         },
         .axis => |axis| {
             const value = axis.value.toDouble();
@@ -345,6 +356,9 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *AppState) vo
             } else {
                 state.current_tool.decreaseThickness(2);
             }
+        },
+        .leave => |leave| {
+            state.serial = leave.serial;
         },
         .frame => {},
         else => {},
@@ -403,4 +417,55 @@ pub fn copySelectionToClipboardPersistent(state: *AppState) !void {
     }
 
     _ = try child.wait();
+}
+
+fn setCursor(state: *AppState, name: [:0]const u8) void {
+    const theme = state.cursor_theme orelse return;
+    const cursor_surface = state.cursor_surface orelse return;
+    const pointer = state.pointer orelse return;
+
+    const cursor = theme.getCursor(name) orelse return;
+    const image = cursor.images[0];
+
+    const buffer = image.getBuffer() catch return;
+
+    cursor_surface.attach(buffer, 0, 0);
+    cursor_surface.damageBuffer(0, 0, std.math.maxInt(i32), std.math.maxInt(i32));
+    cursor_surface.commit();
+
+    pointer.setCursor(
+        state.serial.?,
+        cursor_surface,
+        @intCast(image.hotspot_x),
+        @intCast(image.hotspot_y),
+    );
+}
+
+fn updateCursorForTool(state: *AppState) void {
+    const cursor_name = switch (state.tool_mode) {
+        .selection, .draw_text => blk: {
+            if (state.mouse_pressed) {
+                if (state.canvas.selection) |sel| {
+                    const handle = sel.getHandleAt(state.pointer_x, state.pointer_y);
+
+                    break :blk switch (handle) {
+                        .none => "left_ptr",
+                        .nw => "bottom_right_corner",
+                        .se => "bottom_right_corner",
+                        .ne => "bottom_left_corner",
+                        .sw => "bottom_left_corner",
+                        .n => "sb_up_arrow",
+                        .s => "sb_down_arrow",
+                        .w => "sb_left_arrow",
+                        .e => "sb_right_arrow",
+                        .move => "hand1",
+                    };
+                }
+            }
+            break :blk "left_ptr";
+        },
+        .draw_arrow, .draw_rectangle, .draw_circle, .draw_line => "diamond_cross",
+    };
+
+    setCursor(state, cursor_name);
 }
