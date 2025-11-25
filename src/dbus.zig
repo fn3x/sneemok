@@ -119,7 +119,7 @@ pub const DBus = struct {
         const request_handle = try self.getScreenshotRequestHandle();
 
         const t1 = std.time.milliTimestamp();
-        std.log.info("[0.1] Got screenshot request handle: {d}ms", .{t1 - start});
+        std.log.debug("Got screenshot request handle: {d}ms", .{t1 - start});
 
         var buf: [512]u8 = undefined;
         const match_rule = try std.fmt.bufPrintZ(&buf, "type='signal',interface='org.freedesktop.portal.Request',member='Response',path='{s}'", .{request_handle});
@@ -128,7 +128,7 @@ pub const DBus = struct {
         c.dbus_connection_flush(self.conn);
 
         const t2 = std.time.milliTimestamp();
-        std.log.info("[0.2] Added bus match rule: {d}ms", .{t2 - t1});
+        std.log.debug("Added bus match rule: {d}ms", .{t2 - t1});
 
         while (c.dbus_connection_read_write(self.conn, @intCast(2000)) != 0) {
             const message = c.dbus_connection_pop_message(self.conn);
@@ -142,7 +142,7 @@ pub const DBus = struct {
             }
 
             const t3 = std.time.milliTimestamp();
-            std.log.info("[0.3] Got portal response signal: {d}ms", .{t3 - t2});
+            std.log.debug("Got portal response for screenshot signal: {d}ms", .{t3 - t2});
 
             var iter: c.DBusMessageIter = undefined;
             if (c.dbus_message_iter_init(message, &iter) == 0) {
@@ -167,7 +167,6 @@ pub const DBus = struct {
                 _ = c.dbus_message_iter_next(&entry_iter);
 
                 const t4 = std.time.milliTimestamp();
-                std.log.info("[0.4] Checking name: {d}ms", .{t4 - t3});
 
                 if (std.mem.eql(u8, std.mem.span(key), "uri")) {
                     var variant_iter: c.DBusMessageIter = undefined;
@@ -177,7 +176,7 @@ pub const DBus = struct {
                     c.dbus_message_iter_get_basic(&variant_iter, @ptrCast(&uri));
 
                     const t5 = std.time.milliTimestamp();
-                    std.log.info("[0.5] Gor URI: {d}ms", .{t5 - t4});
+                    std.log.debug("Got screenshot URI: {d}ms", .{t5 - t4});
 
                     return uri;
                 }

@@ -220,7 +220,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *Ap
                         wl.Compositor,
                         wl.Compositor.generated_version,
                     ) catch @panic("Failed to bind wl_compositor");
-                    std.log.info("Got compositor", .{});
+                    std.log.info("Binded wl_compositor", .{});
                 },
                 .wl_output => {
                     const output = state.allocator.create(Output) catch return;
@@ -229,7 +229,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *Ap
                     output.wl_output.?.setListener(*Output, outputListener, output);
                     state.outputs.append(state.allocator, output) catch return;
 
-                    std.log.info("Got wl_output", .{});
+                    std.log.info("Binded wl_output", .{});
                 },
                 .wl_shm => {
                     state.shm = registry.bind(
@@ -237,7 +237,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *Ap
                         wl.Shm,
                         wl.Shm.generated_version,
                     ) catch @panic("Failed to bind wl_shm");
-                    std.log.info("Got wl_shm", .{});
+                    std.log.info("Binded wl_shm", .{});
                 },
                 .wl_seat => {
                     state.seat = registry.bind(
@@ -246,7 +246,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *Ap
                         wl.Seat.generated_version,
                     ) catch @panic("Failed to bind wl_seat");
                     state.seat.?.setListener(*AppState, seatListener, state);
-                    std.log.info("Got wl_seat", .{});
+                    std.log.info("Binded wl_seat", .{});
                 },
                 .zwlr_layer_shell_v1 => {
                     state.layer_shell = registry.bind(
@@ -254,7 +254,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *Ap
                         zwlr.LayerShellV1,
                         zwlr.LayerShellV1.generated_version,
                     ) catch @panic("Failed to bind zwlr_layer_shell_v1");
-                    std.log.info("Got zwlr_layer_shell_v1", .{});
+                    std.log.info("Binded zwlr_layer_shell_v1", .{});
                 },
                 .wl_data_device_manager => {
                     state.data_device_manager = registry.bind(
@@ -262,7 +262,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *Ap
                         wl.DataDeviceManager,
                         wl.DataDeviceManager.generated_version,
                     ) catch @panic("Failed to bind wl_data_device_manager");
-                    std.log.info("Got wl_data_device_manager", .{});
+                    std.log.info("Binded wl_data_device_manager", .{});
                 },
             }
         },
@@ -305,7 +305,7 @@ fn layerSurfaceListener(layer_surface: *zwlr.LayerSurfaceV1, event: zwlr.LayerSu
             output.sendFrame();
         },
         .closed => {
-            std.process.exit(0);
+            output.state.?.running = false;
         },
     }
 }
@@ -376,6 +376,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *AppState)
                     else => {},
                 }
                 state.setAllOutputsDirty();
+                updateCursorForTool(state);
             }
         },
         .modifiers => |mods| {
@@ -572,7 +573,7 @@ fn updateCursorForTool(state: *AppState) void {
             }
             break :blk "left_ptr";
         },
-        .draw_arrow, .draw_rectangle, .draw_circle, .draw_line => "diamond_cross",
+        .draw_arrow, .draw_rectangle, .draw_circle, .draw_line => "crosshair",
     };
 
     setCursor(state, cursor_name);
