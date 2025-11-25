@@ -22,7 +22,7 @@ pub const DBus = struct {
         c.dbus_connection_unref(self.conn);
     }
 
-    fn checkScreenshotPortal(self: *Self) !bool {
+    pub fn checkScreenshotPortal(self: *Self) !bool {
         const msg = c.dbus_message_new_method_call(
             "org.freedesktop.DBus",
             "/org/freedesktop/DBus",
@@ -114,18 +114,21 @@ pub const DBus = struct {
     }
 
     pub fn getScreenshotURI(self: *Self) ![*c]const u8 {
-        const available = try self.checkScreenshotPortal();
-        if (!available) {
-            return error.ScreenshotPortalNotAvailable;
-        }
+        const start = std.time.milliTimestamp();
 
         const request_handle = try self.getScreenshotRequestHandle();
+
+        const t1 = std.time.milliTimestamp();
+        std.log.info("[0.1] Got screenshot request handle: {d}ms", .{t1 - start});
 
         var buf: [512]u8 = undefined;
         const match_rule = try std.fmt.bufPrintZ(&buf, "type='signal',interface='org.freedesktop.portal.Request',member='Response',path='{s}'", .{request_handle});
 
         c.dbus_bus_add_match(self.conn, match_rule.ptr, null);
         c.dbus_connection_flush(self.conn);
+
+        const t2 = std.time.milliTimestamp();
+        std.log.info("[0.2] Added bus match rule: {d}ms", .{t2 - t1});
 
         while (c.dbus_connection_read_write(self.conn, @intCast(2000)) != 0) {
             const message = c.dbus_connection_pop_message(self.conn);
@@ -137,6 +140,9 @@ pub const DBus = struct {
             if (c.dbus_message_is_signal(message, "org.freedesktop.portal.Request", "Response") == 0) {
                 continue;
             }
+
+            const t3 = std.time.milliTimestamp();
+            std.log.info("[0.3] Got portal response signal: {d}ms", .{t3 - t2});
 
             var iter: c.DBusMessageIter = undefined;
             if (c.dbus_message_iter_init(message, &iter) == 0) {
@@ -160,12 +166,18 @@ pub const DBus = struct {
 
                 _ = c.dbus_message_iter_next(&entry_iter);
 
+                const t4 = std.time.milliTimestamp();
+                std.log.info("[0.4] Checking name: {d}ms", .{t4 - t3});
+
                 if (std.mem.eql(u8, std.mem.span(key), "uri")) {
                     var variant_iter: c.DBusMessageIter = undefined;
                     c.dbus_message_iter_recurse(&entry_iter, &variant_iter);
 
                     var uri: [*c]const u8 = undefined;
                     c.dbus_message_iter_get_basic(&variant_iter, @ptrCast(&uri));
+
+                    const t5 = std.time.milliTimestamp();
+                    std.log.info("[0.5] Gor URI: {d}ms", .{t5 - t4});
 
                     return uri;
                 }

@@ -5,9 +5,7 @@ const Element = @import("element.zig").Element;
 pub const Canvas = struct {
     allocator: std.mem.Allocator,
 
-    image: ?[*c]u8 = null,
-    image_width: i32 = 0,
-    image_height: i32 = 0,
+    image_surface: ?*c.struct__cairo_surface = null,
     width: i32 = 0,
     height: i32 = 0,
 
@@ -26,14 +24,13 @@ pub const Canvas = struct {
 
     pub fn deinit(self: *Canvas) void {
         self.elements.deinit(self.allocator);
+        if (self.image_surface) |img_surface| c.cairo_surface_destroy(img_surface);
     }
 
-    pub fn setImage(self: *Canvas, image: [*c]u8, width: i32, height: i32) void {
-        self.image = image;
-        self.image_width = width;
-        self.image_height = height;
-        self.width = width;
-        self.height = height;
+    pub fn setImageSurface(self: *Canvas, surface: *c.struct__cairo_surface) void {
+        self.image_surface = surface;
+        self.width = @intCast(c.cairo_image_surface_get_width(surface));
+        self.height = @intCast(c.cairo_image_surface_get_height(surface));
     }
 
     pub fn addElement(self: *Canvas, element: Element) !void {
@@ -62,16 +59,7 @@ pub const Canvas = struct {
         const cr = c.cairo_create(surface);
         defer c.cairo_destroy(cr);
 
-        if (self.image) |image| {
-            const img_surface = c.cairo_image_surface_create_for_data(
-                @ptrCast(@constCast(image)),
-                c.CAIRO_FORMAT_ARGB32,
-                self.width,
-                self.height,
-                self.width * 4,
-            );
-            defer c.cairo_surface_destroy(img_surface);
-
+        if (self.image_surface) |img_surface| {
             c.cairo_set_source_surface(cr, img_surface, @floatFromInt(-sel.x), @floatFromInt(-sel.y));
             c.cairo_paint(cr);
         }

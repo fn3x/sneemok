@@ -52,16 +52,7 @@ pub const Output = struct {
             const src_h = @min(state.canvas.height - src_y, img_h);
 
             if (src_w > 0 and src_h > 0) {
-                if (state.canvas.image) |image| {
-                    const img_surface = c.cairo_image_surface_create_for_data(
-                        @ptrCast(image),
-                        c.CAIRO_FORMAT_ARGB32,
-                        state.canvas.width,
-                        state.canvas.height,
-                        state.canvas.width * 4,
-                    );
-                    defer c.cairo_surface_destroy(img_surface);
-
+                if (state.canvas.image_surface) |img_surface| {
                     c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
                     c.cairo_set_source_surface(cr, img_surface, @floatFromInt(-img_x), @floatFromInt(-img_y));
                     c.cairo_paint(cr);
@@ -89,16 +80,7 @@ pub const Output = struct {
                     local_x < self.width and local_y < self.height and
                     local_x + sel_w > 0 and local_y + sel_h > 0)
                 {
-                    if (state.canvas.image) |image| {
-                        const img_surface = c.cairo_image_surface_create_for_data(
-                            @ptrCast(image),
-                            c.CAIRO_FORMAT_ARGB32,
-                            state.canvas.width,
-                            state.canvas.height,
-                            state.canvas.width * 4,
-                        );
-                        defer c.cairo_surface_destroy(img_surface);
-
+                    if (state.canvas.image_surface) |img_surface| {
                         c.cairo_save(cr);
                         c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
                         c.cairo_set_source_surface(cr, img_surface, @floatFromInt(-img_x), @floatFromInt(-img_y));
@@ -116,7 +98,7 @@ pub const Output = struct {
         }
 
         if (state.canvas.selection) |sel| {
-            if (state.canvas.image) |image| {
+            if (state.canvas.image_surface) |img_surface| {
                 const local_x = sel.x - self.geometry.x;
                 const local_y = sel.y - self.geometry.y;
 
@@ -124,15 +106,6 @@ pub const Output = struct {
                     local_x < self.width and local_y < self.height and
                     local_x + sel.width > 0 and local_y + sel.height > 0)
                 {
-                    const img_surface = c.cairo_image_surface_create_for_data(
-                        @ptrCast(image),
-                        c.CAIRO_FORMAT_ARGB32,
-                        state.canvas.width,
-                        state.canvas.height,
-                        state.canvas.width * 4,
-                    );
-                    defer c.cairo_surface_destroy(img_surface);
-
                     c.cairo_save(cr);
                     c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
                     c.cairo_set_source_surface(cr, img_surface, @floatFromInt(-img_x), @floatFromInt(-img_y));
