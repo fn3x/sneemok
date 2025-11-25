@@ -162,7 +162,7 @@ pub const Output = struct {
         const buffer_height = self.height * self.scale;
 
         self.current_buffer = Buffer.getNextBuffer(
-            state.shm.?,
+            state.wayland.?.shm.?,
             &self.buffers,
             buffer_width,
             buffer_height,
