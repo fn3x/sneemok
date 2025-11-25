@@ -49,8 +49,6 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("wayland-cursor");
     exe.linkSystemLibrary("cairo");
 
-    exe.addIncludePath(b.path("headers"));
-
     exe.root_module.addImport("wayland", wayland);
     exe.root_module.addImport("xkbcommon", xkbcommon);
     exe.root_module.addImport("wlroots", wlroots);

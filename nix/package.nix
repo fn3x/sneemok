@@ -2,7 +2,6 @@
 , stdenv
 , callPackage
 , zig
-, stb
 , wayland
 , wayland-scanner
 , wayland-protocols
@@ -26,7 +25,6 @@ stdenv.mkDerivation (finalAttrs: {
   nativeBuildInputs = [ zig ];
 
   buildInputs = [
-    stb
     wayland-scanner
     wayland-protocols
     wayland

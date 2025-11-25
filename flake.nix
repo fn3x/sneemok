@@ -19,7 +19,6 @@
       devShells.${system}.default = pkgs.mkShell {
         packages = with pkgs; [ zig ];
         buildInputs = with pkgs; [
-          stb
           wayland-scanner
           wayland-protocols
           wayland
