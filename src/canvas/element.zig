@@ -222,7 +222,7 @@ pub const LineElement = struct {
     pub fn render(self: *const LineElement, cr: *c.cairo_t, offset_x: i32, offset_y: i32) void {
         const sx: f64 = @floatFromInt(self.start_x - offset_x);
         const sy: f64 = @floatFromInt(self.start_y - offset_y);
-        const ex: f64 = @floatFromInt(self.end_x - offset_y);
+        const ex: f64 = @floatFromInt(self.end_x - offset_x);
         const ey: f64 = @floatFromInt(self.end_y - offset_y);
 
         c.cairo_set_source_rgba(cr, self.color.r, self.color.g, self.color.b, self.color.a);
