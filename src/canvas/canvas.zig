@@ -15,6 +15,8 @@ pub const Canvas = struct {
 
     active_element_index: ?usize = null,
 
+    cached_clipboard_png: ?[]u8 = null,
+
     pub fn init(allocator: std.mem.Allocator) Canvas {
         return .{
             .allocator = allocator,
@@ -25,6 +27,7 @@ pub const Canvas = struct {
     pub fn deinit(self: *Canvas) void {
         self.elements.deinit(self.allocator);
         if (self.image_surface) |img_surface| c.cairo_surface_destroy(img_surface);
+        if (self.cached_clipboard_png) |png| self.allocator.free(png);
     }
 
     pub fn setImageSurface(self: *Canvas, surface: *c.struct__cairo_surface) void {
@@ -83,6 +86,47 @@ pub const Canvas = struct {
         if (result != c.CAIRO_STATUS_SUCCESS) {
             return error.CairoWriteFailed;
         }
+    }
+
+    pub fn cacheClipboardPng(self: *Canvas) !void {
+        if (self.cached_clipboard_png) |old| {
+            self.allocator.free(old);
+        }
+
+        const tmp_path = "/tmp/sneemok_clipboard.png";
+
+        {
+            const file = try std.fs.createFileAbsolute(tmp_path, .{});
+            defer file.close();
+            try self.writeToPngFd(file.handle);
+        }
+
+        const file = try std.fs.openFileAbsolute(tmp_path, .{});
+        defer file.close();
+        defer std.fs.deleteFileAbsolute(tmp_path) catch {};
+
+        const size = try file.getEndPos();
+        const buffer = try self.allocator.alloc(u8, size);
+        errdefer self.allocator.free(buffer);
+
+        const bytes_read = try file.readAll(buffer);
+        if (bytes_read != size) {
+            return error.IncompleteRead;
+        }
+
+        self.cached_clipboard_png = buffer;
+        std.log.info("Cached {} bytes of PNG data", .{size});
+    }
+
+    pub fn writeCachedPngToFd(self: *const Canvas, fd: std.posix.fd_t) !void {
+        const png_data = self.cached_clipboard_png orelse return error.NoCachedData;
+
+        const file = std.fs.File{ .handle = fd };
+        var file_writer = file.writer(&.{});
+        const writer = &file_writer.interface;
+
+        try writer.writeAll(png_data);
+        try writer.flush();
     }
 
     pub fn clearPixels(self: *const Canvas, pixels: *[]u8) void {

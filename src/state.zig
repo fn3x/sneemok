@@ -1,4 +1,5 @@
 const std = @import("std");
+const c = @import("c.zig").c;
 const Wayland = @import("wayland.zig").Wayland;
 const Canvas = @import("canvas/canvas.zig").Canvas;
 const Tool = @import("tools/tool.zig").Tool;
@@ -32,7 +33,10 @@ pub const ToolMode = enum {
 };
 
 pub const AppState = struct {
-    running: bool = true,
+    mutex: std.Thread.Mutex = .{},
+
+    running: std.atomic.Value(bool),
+    clipboard_mode: std.atomic.Value(bool),
 
     allocator: std.mem.Allocator,
 
@@ -52,6 +56,8 @@ pub const AppState = struct {
             .allocator = allocator,
             .canvas = Canvas.init(allocator),
             .current_tool = Tool{ .selection = SelectionTool.init() },
+            .running = std.atomic.Value(bool).init(true),
+            .clipboard_mode = std.atomic.Value(bool).init(false),
         };
     }
 
@@ -70,5 +76,36 @@ pub const AppState = struct {
             .draw_text => Tool{ .text = TextTool.init() },
         };
         std.log.info("Switched to tool: {s}", .{mode.toName()});
+    }
+
+    pub fn enterClipboardMode(self: *AppState) void {
+        self.clipboard_mode.store(true, .release);
+
+        if (self.wayland) |wayland| {
+            wayland.cleanupAfterCopy();
+        }
+
+        if (self.canvas.image_surface) |surface| {
+            c.cairo_surface_destroy(surface);
+            self.canvas.image_surface = null;
+        }
+
+        std.log.info("Entered clipboard mode - minimal memory footprint", .{});
+    }
+
+    pub fn exitClipboardMode(self: *AppState) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (!self.clipboard_mode.load(.acquire)) return;
+
+        std.log.info("Exiting clipboard mode, restoring app...", .{});
+        self.clipboard_mode.store(false, .release);
+
+        if (self.wayland) |wayland| {
+            try wayland.restoreAfterClipboard();
+        }
+
+        std.log.info("App restored", .{});
     }
 };

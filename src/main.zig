@@ -19,16 +19,34 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
-    const args = std.process.argsAlloc(allocator) catch return;
-    defer std.process.argsFree(gpa.allocator(), args);
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
 
-    if (args.len > 1) {
-        if (std.mem.eql(u8, args[1], "--daemon")) {
-            try runDaemon(allocator);
-        } else if (std.mem.eql(u8, args[1], "--screenshot")) {
-            try sendCommand("Screenshot");
-        } else if (std.mem.eql(u8, args[1], "--help")) {}
-    } else {}
+    _ = args.skip();
+
+    var is_daemon: bool = false;
+    var is_screenshot: bool = false;
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--daemon")) {
+            is_daemon = true;
+        } else if (std.mem.eql(u8, arg, "--screenshot")) {
+            is_screenshot = true;
+        }
+    }
+
+    if (is_daemon and is_screenshot) {
+        std.log.err("Called with mutually excluding arguments --daemon and --screenshot. Please, choose one or the other.", .{});
+        std.process.exit(1);
+        return;
+    }
+
+    if (!is_daemon or is_screenshot) {
+        try sendCommand("Screenshot");
+        return;
+    }
+
+    try runDaemon(allocator);
 }
 
 fn sendCommand(method: [*c]const u8) !void {
@@ -66,6 +84,14 @@ const introspect_xml =
     \\</node>
 ;
 
+const DaemonContext = struct {
+    allocator: Allocator,
+    state: ?*AppState = null,
+    wayland: ?*Wayland = null,
+    dbus: *DBus,
+    mutex: std.Thread.Mutex = .{},
+};
+
 fn runDaemon(allocator: Allocator) !void {
     var dbus = try DBus.init();
     defer dbus.deinit();
@@ -94,23 +120,58 @@ fn runDaemon(allocator: Allocator) !void {
 
     std.debug.print("Daemon running...\n", .{});
 
-    while (true) {
-        _ = c.dbus_connection_read_write(dbus.conn, 100);
+    var context = DaemonContext{
+        .allocator = allocator,
+        .dbus = &dbus,
+    };
 
-        while (c.dbus_connection_pop_message(dbus.conn)) |msg| {
+    const dbus_thread = try std.Thread.spawn(.{}, dbusListenerThread, .{&context});
+    defer dbus_thread.join();
+
+    while (context.state == null or context.wayland == null) {
+        std.Thread.sleep(10 * std.time.ns_per_ms);
+    }
+
+    std.log.info("State initialized, starting Wayland event loop", .{});
+
+    while (context.state.?.running.load(.acquire)) {
+        _ = context.state.?.wayland.?.display.?.dispatch();
+    }
+
+    std.log.info("Daemon exiting", .{});
+
+    context.mutex.lock();
+    defer context.mutex.unlock();
+
+    if (context.wayland) |wayland| {
+        wayland.deinit();
+        context.allocator.destroy(wayland);
+    }
+    if (context.state) |state| {
+        state.deinit();
+        context.allocator.destroy(state);
+    }
+}
+
+fn dbusListenerThread(context: *DaemonContext) void {
+    std.log.info("D-Bus listener thread started", .{});
+
+    while (true) {
+        _ = c.dbus_connection_read_write(context.dbus.conn, 100);
+
+        while (c.dbus_connection_pop_message(context.dbus.conn)) |msg| {
             defer c.dbus_message_unref(msg);
 
             if (c.dbus_message_is_method_call(msg, "org.freedesktop.DBus.Introspectable", "Introspect") != 0) {
-                // Reply with minimal introspection data
                 const reply = c.dbus_message_new_method_return(msg);
                 if (reply != null) {
                     var iter: c.DBusMessageIter = undefined;
                     c.dbus_message_iter_init_append(reply, &iter);
                     const xml_ptr: [*c]const u8 = introspect_xml.ptr;
                     _ = c.dbus_message_iter_append_basic(&iter, c.DBUS_TYPE_STRING, @ptrCast(&xml_ptr));
-                    _ = c.dbus_connection_send(dbus.conn, reply, null);
+                    _ = c.dbus_connection_send(context.dbus.conn, reply, null);
                     c.dbus_message_unref(reply);
-                    c.dbus_connection_flush(dbus.conn);
+                    c.dbus_connection_flush(context.dbus.conn);
                 }
                 continue;
             }
@@ -120,29 +181,72 @@ fn runDaemon(allocator: Allocator) !void {
 
                 const reply = c.dbus_message_new_method_return(msg);
                 if (reply != null) {
-                    _ = c.dbus_connection_send(dbus.conn, reply, null);
+                    _ = c.dbus_connection_send(context.dbus.conn, reply, null);
                     c.dbus_message_unref(reply);
-                    c.dbus_connection_flush(dbus.conn);
+                    c.dbus_connection_flush(context.dbus.conn);
                 }
 
-                gui(allocator, &dbus) catch |err| {
-                    std.debug.print("GUI error: {}\n", .{err});
+                handleScreenshotRequest(context) catch |err| {
+                    std.log.err("Failed to handle screenshot: {}", .{err});
                 };
             }
         }
+
+        if (context.state) |state| {
+            if (!state.running.load(.acquire)) {
+                break;
+            }
+        }
     }
+
+    std.log.info("D-Bus listener thread exiting", .{});
 }
 
-pub fn gui(allocator: Allocator, dbus: *DBus) !void {
-    const uri = try dbus.getScreenshotURI();
+fn handleScreenshotRequest(context: *DaemonContext) !void {
+    std.log.debug("handleScreenshotRequest::enter", .{});
+    context.mutex.lock();
+    defer context.mutex.unlock();
 
+    if (context.state) |state| {
+        if (state.clipboard_mode.load(.acquire)) {
+            std.log.info("Restoring from clipboard mode...", .{});
+            try state.exitClipboardMode();
+
+            const uri = try context.dbus.getScreenshotURI();
+            const uri_str = std.mem.span(uri);
+            const file_path = uri_str[7..]; // Remove "file://"
+
+            var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const path_z = try std.fmt.bufPrintZ(&path_buf, "{s}", .{file_path});
+
+            const surface = c.cairo_image_surface_create_from_png(path_z.ptr);
+            if (c.cairo_surface_status(surface) != c.CAIRO_STATUS_SUCCESS) {
+                return error.LoadFailed;
+            }
+
+            state.canvas.setImageSurface(surface.?);
+            state.canvas.selection = null;
+            state.canvas.elements.clearRetainingCapacity();
+            state.setTool(.selection);
+
+            if (state.wayland) |wayland| {
+                wayland.setAllOutputsDirty();
+            }
+
+            std.log.info("New screenshot loaded", .{});
+            return;
+        }
+    }
+
+    const uri = try context.dbus.getScreenshotURI();
     std.log.info("Screenshot URI: {s}", .{uri});
 
-    var state = AppState.init(allocator);
-    defer state.deinit();
+    const state = try context.allocator.create(AppState);
+    state.* = AppState.init(context.allocator);
+    context.state = state;
 
     const uri_str = std.mem.span(uri);
-    const file_path = uri_str[7..]; // Remove "file://" prefix
+    const file_path = uri_str[7..];
 
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const path_z = try std.fmt.bufPrintZ(&path_buf, "{s}", .{file_path});
@@ -154,14 +258,12 @@ pub fn gui(allocator: Allocator, dbus: *DBus) !void {
 
     state.canvas.setImageSurface(surface.?);
 
-    var wayland = Wayland.init(allocator, &state);
-    state.wayland = &wayland;
-    defer state.wayland.?.deinit();
+    const wayland = try context.allocator.create(Wayland);
+    wayland.* = Wayland.init(context.allocator, state);
+    state.wayland = wayland;
+    context.wayland = wayland;
 
     try state.wayland.?.start();
 
-    while (state.running) {
-        _ = state.wayland.?.display.?.dispatch();
-    }
+    std.log.info("GUI initialized", .{});
 }
-

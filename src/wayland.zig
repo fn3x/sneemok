@@ -80,6 +80,38 @@ pub const Wayland = struct {
         if (self.display) |disp| disp.disconnect();
     }
 
+    pub fn cleanupAfterCopy(self: *Wayland) void {
+        std.log.info("Cleaning up rendering resources, keeping clipboard active...", .{});
+
+        for (self.outputs.items) |output| {
+            if (output.layer_surface) |ls| ls.destroy();
+            if (output.surface) |surf| surf.destroy();
+            if (output.wl_output) |wo| wo.release();
+            self.allocator.destroy(output);
+        }
+        self.outputs.clearAndFree(self.allocator);
+
+        if (self.keyboard) |kb| kb.release();
+        self.keyboard = null;
+        if (self.pointer) |ptr| ptr.release();
+        self.pointer = null;
+
+        if (self.cursor_surface) |surf| surf.destroy();
+        self.cursor_surface = null;
+        if (self.cursor_theme) |theme| theme.destroy();
+        self.cursor_theme = null;
+
+        if (self.seat) |seat| seat.release();
+        self.seat = null;
+
+        if (self.layer_shell) |ls| ls.destroy();
+        self.layer_shell = null;
+        if (self.shm) |shm| shm.destroy();
+        self.shm = null;
+
+        std.log.info("Cleanup complete, clipboard still active", .{});
+    }
+
     pub fn start(self: *Self) !void {
         self.display = try wl.Display.connect(null);
         const display = self.display.?;
@@ -116,6 +148,67 @@ pub const Wayland = struct {
         }
 
         _ = display.roundtrip();
+    }
+
+    pub fn restoreAfterClipboard(self: *Wayland) !void {
+        std.log.info("Restoring Wayland resources...", .{});
+
+        if (self.compositor == null) {
+            _ = self.display.?.roundtrip();
+
+            if (self.compositor == null) {
+                return error.CompositorLost;
+            }
+        }
+
+        if (self.shm == null) {
+            _ = self.display.?.roundtrip();
+        }
+
+        if (self.layer_shell == null) {
+            _ = self.display.?.roundtrip();
+        }
+
+        if (self.seat == null) {
+            _ = self.display.?.roundtrip();
+        }
+
+        if (self.seat) |seat| {
+            self.keyboard = try seat.getKeyboard();
+            self.keyboard.?.setListener(*Wayland, keyboardListener, self);
+
+            self.pointer = try seat.getPointer();
+            self.pointer.?.setListener(*Wayland, pointerListener, self);
+        }
+
+        if (self.compositor) |comp| {
+            self.cursor_surface = try comp.createSurface();
+        }
+        if (self.shm) |shm| {
+            self.cursor_theme = try wl.CursorTheme.load(null, 24, shm);
+        }
+
+        for (self.outputs.items) |output| {
+            output.surface = try self.compositor.?.createSurface();
+            output.layer_surface = try self.layer_shell.?.getLayerSurface(
+                output.surface.?,
+                output.wl_output,
+                .overlay,
+                "screenshot",
+            );
+
+            output.layer_surface.?.setListener(*Output, layerSurfaceListener, output);
+            output.layer_surface.?.setSize(0, 0);
+            output.layer_surface.?.setAnchor(.{ .top = true, .bottom = true, .left = true, .right = true });
+            output.layer_surface.?.setExclusiveZone(-1);
+            output.layer_surface.?.setKeyboardInteractivity(.exclusive);
+
+            output.surface.?.commit();
+        }
+
+        _ = self.display.?.roundtrip();
+
+        std.log.info("Wayland resources restored", .{});
     }
 
     pub fn setAllOutputsDirty(self: *Wayland) void {
@@ -221,7 +314,7 @@ fn layerSurfaceListener(layer_surface: *zwlr.LayerSurfaceV1, event: zwlr.LayerSu
             output.sendFrame();
         },
         .closed => {
-            output.state.?.running = false;
+            output.state.?.running.store(false, .release);
         },
     }
 }
@@ -262,15 +355,9 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, wayland: *Wayland
             const ctrl_pressed = wayland.keyboard_modifiers.ctrl;
 
             if (ctrl_pressed and key.key == 46) { // 46 = 'c' key
-                copySelectionToClipboardPersistent(wayland.state) catch |wlcopy_error| {
-                    std.log.warn("wl-copy failed ({}), falling back to native Wayland clipboard", .{wlcopy_error});
-
-                    // Fallback to native Wayland clipboard
-                    copySelectionToClipboard(wayland.state) catch |wayland_error| {
-                        std.log.warn("Native Wayland clipboard failed ({})", .{wayland_error});
-                    };
+                copySelectionToClipboard(wayland.state) catch |wayland_error| {
+                    std.log.warn("Native Wayland clipboard failed ({})", .{wayland_error});
                 };
-                wayland.state.running = false;
                 return;
             }
 
@@ -280,7 +367,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, wayland: *Wayland
                         if (wayland.state.current_tool != .selection) {
                             wayland.state.setTool(.selection);
                         } else {
-                            wayland.state.running = false;
+                            wayland.state.running.store(false, .release);
                         }
                     },
                     31 => wayland.state.setTool(.selection), // 's' key
@@ -395,15 +482,27 @@ fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, s
         .send => |send| {
             if (std.mem.eql(u8, std.mem.span(send.mime_type), "image/png")) {
                 defer std.posix.close(send.fd);
-                state.canvas.writeToPngFd(send.fd) catch |err| {
-                    std.log.err("Error on writing selection to png fd {}", .{err});
-                };
+
+                if (state.clipboard_mode.load(.acquire)) {
+                    state.canvas.writeCachedPngToFd(send.fd) catch |err| {
+                        std.log.err("Failed to write cached PNG: {}", .{err});
+                    };
+                } else {
+                    state.canvas.writeToPngFd(send.fd) catch |err| {
+                        std.log.err("Error on writing selection to png fd {}", .{err});
+                    };
+                }
                 std.log.debug("wl_data_source::copied to clipboard fd={d}", .{send.fd});
             }
         },
         .cancelled => {
             std.log.info("wl_data_source::clipboard selection cancelled (replaced by another copy)", .{});
             data_source.destroy();
+            state.wayland.?.data_source = null;
+
+            if (state.clipboard_mode.load(.acquire)) {
+                state.running.store(false, .release);
+            }
         },
         else => |ev| {
             std.log.debug("wl_data_source::event {}", .{ev});
@@ -416,11 +515,15 @@ pub fn copySelectionToClipboard(state: *AppState) !void {
         return;
     }
 
+    try state.canvas.cacheClipboardPng();
+
     const data_source = try state.wayland.?.data_device_manager.?.createDataSource();
 
     data_source.offer("image/png");
     data_source.setListener(*AppState, dataSourceListener, state);
     state.wayland.?.data_device.?.setSelection(data_source, state.wayland.?.serial.?);
+
+    state.enterClipboardMode();
 }
 
 pub fn copySelectionToClipboardPersistent(state: *AppState) !void {
