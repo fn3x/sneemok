@@ -3,8 +3,8 @@ pkgname=sneemok-git
 pkgver=0.2.3
 pkgrel=1
 pkgdesc="Wayland screenshot annotation tool with clipboard support (git version)"
-arch=('x86_64' 'aarch64')
-url="https://codeberg.com/fn3x/sneemok"
+arch=('x86_64')
+url="https://codeberg.org/fn3x/sneemok"
 license=('MIT')
 depends=(
     'wayland'
@@ -26,7 +26,7 @@ optdepends=(
 provides=('sneemok')
 conflicts=('sneemok')
 source=("$pkgname::git+$url.git")
-sha256sums=('67cbcb07c4e44d2911a5b6537641a8d793d79c38508223687c062cc648bfcc59')
+sha256sums=('8b135dc8804801db445ce30b125d499cc26162663c58a505b76aef54eb509ed8')
 
 pkgver() {
     cd "$srcdir/$pkgname"
