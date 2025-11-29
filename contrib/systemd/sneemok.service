@@ -1,0 +1,20 @@
+[Unit]
+Description=Sneemok Screenshot Annotation Tool
+Documentation=https://codeberg.com/fn3x/sneemok
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sneemok --daemon
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=graphical-session.target
