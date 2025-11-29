@@ -141,15 +141,24 @@ fn runDaemon(allocator: Allocator) !void {
     std.log.info("Daemon exiting", .{});
 
     context.mutex.lock();
-    defer context.mutex.unlock();
 
-    if (context.wayland) |wayland| {
-        wayland.deinit();
-        context.allocator.destroy(wayland);
+    const state = context.state;
+    const wayland = context.wayland;
+
+    context.state = null;
+    context.wayland = null;
+
+    context.mutex.unlock();
+
+    std.Thread.sleep(50 * std.time.ns_per_ms);
+
+    if (wayland) |w| {
+        w.deinit();
+        context.allocator.destroy(w);
     }
-    if (context.state) |state| {
-        state.deinit();
-        context.allocator.destroy(state);
+    if (state) |s| {
+        s.deinit();
+        context.allocator.destroy(s);
     }
 }
 
@@ -191,30 +200,22 @@ fn dbusListenerThread(context: *DaemonContext) void {
                 };
             }
         }
-
-        if (context.state) |state| {
-            if (!state.running.load(.acquire)) {
-                break;
-            }
-        }
     }
 
     std.log.info("D-Bus listener thread exiting", .{});
 }
 
 fn handleScreenshotRequest(context: *DaemonContext) !void {
-    std.log.debug("handleScreenshotRequest::enter", .{});
     context.mutex.lock();
     defer context.mutex.unlock();
 
     if (context.state) |state| {
         if (state.clipboard_mode.load(.acquire)) {
             std.log.info("Restoring from clipboard mode...", .{});
-            try state.exitClipboardMode();
 
             const uri = try context.dbus.getScreenshotURI();
             const uri_str = std.mem.span(uri);
-            const file_path = uri_str[7..]; // Remove "file://"
+            const file_path = uri_str[7..];
 
             var path_buf: [std.fs.max_path_bytes]u8 = undefined;
             const path_z = try std.fmt.bufPrintZ(&path_buf, "{s}", .{file_path});
@@ -227,7 +228,15 @@ fn handleScreenshotRequest(context: *DaemonContext) !void {
             state.canvas.setImageSurface(surface.?);
             state.canvas.selection = null;
             state.canvas.elements.clearRetainingCapacity();
+
+            if (state.canvas.cached_clipboard_png) |old_png| {
+                state.allocator.free(old_png);
+                state.canvas.cached_clipboard_png = null;
+            }
+
             state.setTool(.selection);
+
+            try state.exitClipboardMode();
 
             if (state.wayland) |wayland| {
                 wayland.setAllOutputsDirty();

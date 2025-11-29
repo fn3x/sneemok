@@ -31,6 +31,9 @@ pub const Canvas = struct {
     }
 
     pub fn setImageSurface(self: *Canvas, surface: *c.struct__cairo_surface) void {
+        if (self.image_surface) |old_surface| {
+            c.cairo_surface_destroy(old_surface);
+        }
         self.image_surface = surface;
         self.width = @intCast(c.cairo_image_surface_get_width(surface));
         self.height = @intCast(c.cairo_image_surface_get_height(surface));

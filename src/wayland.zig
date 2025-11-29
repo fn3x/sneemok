@@ -81,35 +81,33 @@ pub const Wayland = struct {
     }
 
     pub fn cleanupAfterCopy(self: *Wayland) void {
-        std.log.info("Cleaning up rendering resources, keeping clipboard active...", .{});
+        std.log.info("Destroying GUI surfaces, keeping Wayland connection...", .{});
 
+        // Destroy surfaces but KEEP the output objects and wl_output
         for (self.outputs.items) |output| {
-            if (output.layer_surface) |ls| ls.destroy();
-            if (output.surface) |surf| surf.destroy();
-            if (output.wl_output) |wo| wo.release();
-            self.allocator.destroy(output);
+            if (output.layer_surface) |ls| {
+                ls.destroy();
+                output.layer_surface = null;
+            }
+            if (output.surface) |surf| {
+                surf.destroy();
+                output.surface = null;
+            }
         }
-        self.outputs.clearAndFree(self.allocator);
 
         if (self.keyboard) |kb| kb.release();
         self.keyboard = null;
         if (self.pointer) |ptr| ptr.release();
         self.pointer = null;
-
         if (self.cursor_surface) |surf| surf.destroy();
         self.cursor_surface = null;
         if (self.cursor_theme) |theme| theme.destroy();
         self.cursor_theme = null;
 
-        if (self.seat) |seat| seat.release();
-        self.seat = null;
+        // KEEP: display, registry, compositor, shm, layer_shell, seat,
+        // data_device_manager, data_device, outputs list
 
-        if (self.layer_shell) |ls| ls.destroy();
-        self.layer_shell = null;
-        if (self.shm) |shm| shm.destroy();
-        self.shm = null;
-
-        std.log.info("Cleanup complete, clipboard still active", .{});
+        std.log.info("Surfaces destroyed, Wayland connection alive", .{});
     }
 
     pub fn start(self: *Self) !void {
@@ -151,27 +149,7 @@ pub const Wayland = struct {
     }
 
     pub fn restoreAfterClipboard(self: *Wayland) !void {
-        std.log.info("Restoring Wayland resources...", .{});
-
-        if (self.compositor == null) {
-            _ = self.display.?.roundtrip();
-
-            if (self.compositor == null) {
-                return error.CompositorLost;
-            }
-        }
-
-        if (self.shm == null) {
-            _ = self.display.?.roundtrip();
-        }
-
-        if (self.layer_shell == null) {
-            _ = self.display.?.roundtrip();
-        }
-
-        if (self.seat == null) {
-            _ = self.display.?.roundtrip();
-        }
+        std.log.info("Creating fresh surfaces for new screenshot...", .{});
 
         if (self.seat) |seat| {
             self.keyboard = try seat.getKeyboard();
@@ -179,6 +157,8 @@ pub const Wayland = struct {
 
             self.pointer = try seat.getPointer();
             self.pointer.?.setListener(*Wayland, pointerListener, self);
+        } else {
+            return error.SeatLost;
         }
 
         if (self.compositor) |comp| {
@@ -189,6 +169,15 @@ pub const Wayland = struct {
         }
 
         for (self.outputs.items) |output| {
+            for (&output.buffers) |*buffer| {
+                buffer.finishBuffer();
+            }
+            output.current_buffer = null;
+            output.dirty = false;
+            output.frame_callback = null;
+
+            output.configured = false;
+
             output.surface = try self.compositor.?.createSurface();
             output.layer_surface = try self.layer_shell.?.getLayerSurface(
                 output.surface.?,
@@ -206,7 +195,27 @@ pub const Wayland = struct {
             output.surface.?.commit();
         }
 
-        _ = self.display.?.roundtrip();
+        std.log.info("Waiting for surfaces to configure...", .{});
+        var attempts: u32 = 0;
+        while (attempts < 50) : (attempts += 1) {
+            _ = self.display.?.dispatchPending();
+            _ = self.display.?.flush();
+
+            var all_configured = true;
+            for (self.outputs.items) |output| {
+                if (!output.configured) {
+                    all_configured = false;
+                    break;
+                }
+            }
+
+            if (all_configured) {
+                std.log.info("All surfaces configured successfully", .{});
+                break;
+            }
+
+            std.Thread.sleep(10 * std.time.ns_per_ms);
+        }
 
         std.log.info("Wayland resources restored", .{});
     }
@@ -499,10 +508,6 @@ fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, s
             std.log.info("wl_data_source::clipboard selection cancelled (replaced by another copy)", .{});
             data_source.destroy();
             state.wayland.?.data_source = null;
-
-            if (state.clipboard_mode.load(.acquire)) {
-                state.running.store(false, .release);
-            }
         },
         else => |ev| {
             std.log.debug("wl_data_source::event {}", .{ev});
@@ -523,7 +528,11 @@ pub fn copySelectionToClipboard(state: *AppState) !void {
     data_source.setListener(*AppState, dataSourceListener, state);
     state.wayland.?.data_device.?.setSelection(data_source, state.wayland.?.serial.?);
 
-    state.enterClipboardMode();
+    if (!state.clipboard_mode.load(.acquire)) {
+        state.enterClipboardMode();
+    } else {
+        std.log.info("Already in clipboard mode, clipboard data updated", .{});
+    }
 }
 
 pub fn copySelectionToClipboardPersistent(state: *AppState) !void {
