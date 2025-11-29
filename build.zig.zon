@@ -12,10 +12,6 @@
             .url = "https://codeberg.org/ifreund/zig-wlroots/archive/v0.19.3.tar.gz",
             .hash = "wlroots-0.19.3-jmOlcuL_AwBHhLCwpFsXbTizE3q9BugFmGX-XIxqcPMc",
         },
-        .xkbcommon = .{
-            .url = "https://codeberg.org/ifreund/zig-xkbcommon/archive/v0.3.0.tar.gz",
-            .hash = "xkbcommon-0.3.0-VDqIe3K9AQB2fG5ZeRcMC9i7kfrp5m2rWgLrmdNn9azr",
-        },
     },
     .paths = .{
         "build.zig",

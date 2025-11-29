@@ -9,8 +9,8 @@ const Wayland = @import("wayland.zig").Wayland;
 var shutdown_requested = std.atomic.Value(bool).init(false);
 
 fn signalHandler(sig: i32) callconv(.c) void {
-    _ = sig;
     shutdown_requested.store(true, .release);
+    std.log.info("Shutdown signal ({d}) received", .{ sig });
 }
 
 pub fn main() !void {
@@ -126,7 +126,7 @@ fn runDaemon(allocator: Allocator) !void {
         null,
     );
     if (ret != c.DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER) {
-        std.debug.print("Service already running\n", .{});
+        std.log.warn("Service already running", .{});
         return error.AlreadyRunning;
     }
     c.dbus_bus_add_match(
@@ -136,7 +136,7 @@ fn runDaemon(allocator: Allocator) !void {
     );
     c.dbus_connection_flush(dbus.conn);
 
-    std.debug.print("Daemon running...\n", .{});
+    std.log.info("Daemon running...", .{});
 
     var context = DaemonContext{
         .allocator = allocator,
@@ -172,11 +172,7 @@ fn runDaemon(allocator: Allocator) !void {
         }
     }
 
-    if (shutdown_requested.load(.acquire)) {
-        std.log.info("Shutdown signal received, cleaning up...", .{});
-    } else {
-        std.log.info("Daemon exiting normally...", .{});
-    }
+    std.log.info("Daemon exiting...", .{});
 
     dbus_thread.join();
 
@@ -228,7 +224,7 @@ fn dbusListenerThread(context: *DaemonContext) void {
             }
 
             if (c.dbus_message_is_method_call(msg, "org.sneemok.Service", "Screenshot") != 0) {
-                std.debug.print("Screenshot triggered!\n", .{});
+                std.log.debug("Screenshot triggered!\n", .{});
 
                 const reply = c.dbus_message_new_method_return(msg);
                 if (reply != null) {
@@ -284,13 +280,13 @@ fn handleScreenshotRequest(context: *DaemonContext) !void {
                 wayland.setAllOutputsDirty();
             }
 
-            std.log.info("New screenshot loaded", .{});
+            std.log.debug("New screenshot loaded", .{});
             return;
         }
     }
 
     const uri = try context.dbus.getScreenshotURI();
-    std.log.info("Screenshot URI: {s}", .{uri});
+    std.log.debug("Screenshot URI: {s}", .{uri});
 
     const state = try context.allocator.create(AppState);
     state.* = AppState.init(context.allocator);

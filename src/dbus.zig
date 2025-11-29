@@ -9,7 +9,7 @@ pub const DBus = struct {
     pub fn init() !Self {
         const conn = c.dbus_bus_get(c.DBUS_BUS_SESSION, null);
         if (conn == null) {
-            std.debug.print("Failed to connect to D-Bus\n", .{});
+            std.log.err("Failed to connect to D-Bus", .{});
             return error.DBusConnectionNull;
         }
 

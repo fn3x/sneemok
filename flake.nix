@@ -24,10 +24,8 @@
           wayland
           pkg-config
           dbus
-          libxkbcommon
           wlroots
           wlr-protocols
-          wl-clipboard
           cairo
         ];
       };

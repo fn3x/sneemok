@@ -22,11 +22,9 @@ pub fn build(b: *std.Build) void {
     scanner.generate("zwlr_layer_shell_v1", 4);
 
     const wayland = b.createModule(.{ .root_source_file = scanner.result });
-    const xkbcommon = b.dependency("xkbcommon", .{}).module("xkbcommon");
 
     const wlroots = b.dependency("wlroots", .{}).module("wlroots");
     wlroots.addImport("wayland", wayland);
-    wlroots.addImport("xkbcommon", xkbcommon);
 
     // We need to ensure the wlroots include path obtained from pkg-config is
     // exposed to the wlroots module for @cImport() to work. This seems to be
@@ -50,7 +48,6 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("cairo");
 
     exe.root_module.addImport("wayland", wayland);
-    exe.root_module.addImport("xkbcommon", xkbcommon);
     exe.root_module.addImport("wlroots", wlroots);
 
     exe.addIncludePath(.{ .cwd_relative = "/usr/include/dbus-1.0" });
