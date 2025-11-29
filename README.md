@@ -17,7 +17,7 @@ In your Home Manager configuration:
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     home-manager.url = "github:nix-community/home-manager";
-    sneemok.url = "github:fn3x/sneemok";
+    sneemok.url = "git+https://codeberg.org/fn3x/sneemok.git";
   };
 
   outputs = { nixpkgs, home-manager, sneemok, ... }: {
@@ -49,7 +49,7 @@ In your NixOS configuration:
 {
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    sneemok.url = "github:fn3x/sneemok";
+    sneemok.url = "git+https://codeberg.org/fn3x/sneemok.git";
   };
 
   outputs = { nixpkgs, sneemok, ... }: {
