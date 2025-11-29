@@ -1,0 +1,103 @@
+when:
+  event: [push, tag, pull_request]
+
+steps:
+  prepare-release:
+    image: archlinux:latest
+    commands:
+      - pacman-key --init
+      - pacman-key --populate archlinux
+
+      - pacman -Sy --noconfirm archlinux-keyring
+      - pacman -Syu --noconfirm
+      - pacman -S --needed --noconfirm base-devel git zig wayland wlroots0.19 wayland-protocols cairo dbus libxkbcommon pkg-config tar
+
+      - zig build -Doptimize=ReleaseSafe
+
+      - export VERSION=${CI_COMMIT_TAG#v}
+      - echo "Building version $VERSION"
+
+      - mkdir -p sneemok-$VERSION-x86_64-linux
+      - cp zig-out/bin/sneemok sneemok-$VERSION-x86_64-linux/
+      - cp LICENSE sneemok-$VERSION-x86_64-linux/ || echo "No LICENSE file"
+      - cp README.md sneemok-$VERSION-x86_64-linux/ || echo "No README file"
+      - tar czf sneemok-$VERSION-x86_64-linux.tar.gz sneemok-$VERSION-x86_64-linux/
+
+      - sha256sum sneemok-$VERSION-x86_64-linux.tar.gz > checksums.txt
+      - cat checksums.txt
+    when:
+      event: tag
+
+  forgejo-release:
+    image: woodpeckerci/plugin-release
+    settings:
+      api-key:
+        from_secret: gitea_token
+      base-url: https://codeberg.org
+      files:
+        - "sneemok-*-x86_64-linux.tar.gz"
+        - checksums.txt
+      title: ${CI_COMMIT_TAG}
+      note: |
+        Release ${CI_COMMIT_TAG}
+
+        ## Installation
+
+        **Binary:**
+        ```bash
+        wget https://codeberg.org/fn3x/sneemok/releases/download/${CI_COMMIT_TAG}/sneemok-${CI_COMMIT_TAG}-x86_64-linux.tar.gz
+        tar xzf sneemok-${CI_COMMIT_TAG}-x86_64-linux.tar.gz
+        ```
+    when:
+      event: tag
+
+  update-aur:
+    image: archlinux:latest
+    environment:
+      AUR_SSH_KEY:
+        from_secret: aur_ssh_key
+      GIT_USERNAME:
+        from_secret: git_username
+      GIT_EMAIL:
+        from_secret: git_email
+    commands:
+      - pacman -Syu --noconfirm
+      - pacman -S --needed --noconfirm base-devel git openssh sudo wget
+
+      - mkdir -p ~/.ssh
+      - echo "$${AUR_SSH_KEY}" > ~/.ssh/aur
+      - chmod 600 ~/.ssh/aur
+      - echo "Host aur.archlinux.org" > ~/.ssh/config
+      - echo "  IdentityFile ~/.ssh/aur" >> ~/.ssh/config
+      - echo "  User aur" >> ~/.ssh/config
+      - chmod 600 ~/.ssh/config
+      - ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+
+      - export VERSION=${CI_COMMIT_TAG#v}
+
+      - git clone ssh://aur@aur.archlinux.org/sneemok.git aur-repo
+      - cd aur-repo
+
+      - git config --global --add safe.directory /woodpecker/src/codeberg.org/fn3x/sneemok/aur-repo
+      - git config user.name "$${GIT_USERNAME}"
+      - git config user.email "$${GIT_EMAIL}"
+
+      - wget "https://codeberg.org/fn3x/sneemok/archive/${CI_COMMIT_TAG}.tar.gz" -O "sneemok-$VERSION.tar.gz"
+      - export SHA256=$(sha256sum "sneemok-$VERSION.tar.gz" | awk '{print $1}')
+      - echo "Calculated SHA256 $SHA256"
+
+      - sed -i "s/pkgver=.*/pkgver=$VERSION/" PKGBUILD
+      - sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD
+      - sed -i "s|source=.*|source=(\"sneemok-$VERSION.tar.gz::https://codeberg.org/fn3x/sneemok/archive/${CI_COMMIT_TAG}.tar.gz\")|" PKGBUILD
+      - sed -i "s/sha256sums=.*/sha256sums=('$SHA256')/" PKGBUILD
+
+      - useradd -m builder
+      - chown -R builder:builder .
+      - sudo -u builder makepkg --printsrcinfo > .SRCINFO
+
+      - git add PKGBUILD .SRCINFO
+      - git commit -m "Update to $VERSION"
+      - git push origin master
+      - echo "AUR package updated."
+    when:
+      event: tag

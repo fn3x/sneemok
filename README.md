@@ -6,9 +6,26 @@ The main repository is on [codeberg](https://codeberg.org/fn3x/sneemok), which i
 
 Read-only mirrors exist on [github](https://github.com/fn3x/sneemok).
 
-## Usage
 
-### Option 1: Home Manager (Recommended for single user)
+## Dependencies
+
+The service automatically includes:
+- All Wayland/Cairo dependencies (from package)
+- D-Bus session bus access
+- XDG Desktop Portal (for screenshot capture)
+
+## Installation
+
+### Arch:
+
+```bash
+yay -S sneemok
+# or
+yay -S sneemok-git
+```
+
+### Nix
+#### Option 1: Home Manager (Recommended for single user)
 
 In your Home Manager configuration:
 
@@ -41,7 +58,7 @@ Then rebuild:
 home-manager switch --flake .#youruser
 ```
 
-### Option 2: NixOS (System-wide)
+#### Option 2: NixOS (System-wide)
 
 In your NixOS configuration:
 
@@ -172,18 +189,6 @@ systemctl --user disable --now sneemok
 
 ### Build from source
 
-```bash
-# Clone repo
-git clone https://github.com/fn3x/sneemok
-cd sneemok
-
-# Build
-nix build
-
-# Run
-./result/bin/sneemok
-```
-
 ## Build
 
 **With Nix:**
@@ -195,14 +200,6 @@ nix build
 ```bash
 zig build
 ```
-
-## Dependencies
-
-The service automatically includes:
-- wl-clipboard (for persistent clipboard via wl-copy)
-- All Wayland/Cairo dependencies (from package)
-- D-Bus session bus access
-- XDG Desktop Portal (for screenshot capture)
 
 ### Keys
 
@@ -239,7 +236,7 @@ src/
 
 **Format:** BGRA internally, RGBA PNG export
 
-**Clipboard:** wl-copy (persistent) or native Wayland (clears on exit)
+**Clipboard:** Native Wayland
 
 ## License
 

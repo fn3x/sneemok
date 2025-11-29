@@ -10,8 +10,7 @@ depends=(
     'wayland'
     'cairo'
     'dbus'
-    'libxkbcommon'
-    'wl-clipboard'
+    'wlroots0.19'
 )
 makedepends=(
     'zig'
@@ -26,7 +25,7 @@ optdepends=(
 provides=('sneemok')
 conflicts=('sneemok')
 source=("$pkgname::git+$url.git")
-sha256sums=('8b135dc8804801db445ce30b125d499cc26162663c58a505b76aef54eb509ed8')
+sha256sums=('02226f73b19152d65c4ddc60dc88a6b06b62f2f06d7519e18bd42604fca2cfa7')
 
 pkgver() {
     cd "$srcdir/$pkgname"
@@ -39,8 +38,7 @@ pkgver() {
 build() {
     cd "$srcdir/$pkgname"
     
-    export HOME="$srcdir"
-    zig build -Doptimize=ReleaseSafe --prefix /usr
+    zig build -Doptimize=ReleaseSafe
 }
 
 check() {
@@ -50,12 +48,11 @@ check() {
 package() {
     cd "$srcdir/$pkgname"
     
+    export HOME="$srcdir"
     DESTDIR="$pkgdir" zig build install -Doptimize=ReleaseSafe --prefix /usr
     
-    # Install license
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     
-    # Install systemd user service (optional)
     if [ -f contrib/systemd/sneemok.service ]; then
         install -Dm644 contrib/systemd/sneemok.service \
             "$pkgdir/usr/lib/systemd/user/sneemok.service"
