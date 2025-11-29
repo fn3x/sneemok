@@ -148,7 +148,7 @@ pub const Wayland = struct {
         _ = display.roundtrip();
     }
 
-    pub fn restoreAfterClipboard(self: *Wayland) !void {
+    pub fn restoreAfterIdle(self: *Wayland) !void {
         std.log.info("Creating fresh surfaces for new screenshot...", .{});
 
         if (self.seat) |seat| {
@@ -376,7 +376,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, wayland: *Wayland
                         if (wayland.state.current_tool != .selection) {
                             wayland.state.setTool(.selection);
                         } else {
-                            wayland.state.running.store(false, .release);
+                            wayland.state.enterBackgroundMode();
                         }
                     },
                     31 => wayland.state.setTool(.selection), // 's' key
@@ -492,7 +492,7 @@ fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, s
             if (std.mem.eql(u8, std.mem.span(send.mime_type), "image/png")) {
                 defer std.posix.close(send.fd);
 
-                if (state.clipboard_mode.load(.acquire)) {
+                if (state.background_mode.load(.acquire)) {
                     state.canvas.writeCachedPngToFd(send.fd) catch |err| {
                         std.log.err("Failed to write cached PNG: {}", .{err});
                     };
@@ -528,10 +528,10 @@ pub fn copySelectionToClipboard(state: *AppState) !void {
     data_source.setListener(*AppState, dataSourceListener, state);
     state.wayland.?.data_device.?.setSelection(data_source, state.wayland.?.serial.?);
 
-    if (!state.clipboard_mode.load(.acquire)) {
-        state.enterClipboardMode();
+    if (!state.background_mode.load(.acquire)) {
+        state.enterBackgroundMode();
     } else {
-        std.log.info("Already in clipboard mode, clipboard data updated", .{});
+        std.log.info("Already in background mode, clipboard data updated", .{});
     }
 }
 

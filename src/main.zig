@@ -248,7 +248,7 @@ fn handleScreenshotRequest(context: *DaemonContext) !void {
     defer context.mutex.unlock();
 
     if (context.state) |state| {
-        if (state.clipboard_mode.load(.acquire)) {
+        if (state.background_mode.load(.acquire)) {
             std.log.info("Restoring from clipboard mode...", .{});
 
             const uri = try context.dbus.getScreenshotURI();
@@ -274,7 +274,7 @@ fn handleScreenshotRequest(context: *DaemonContext) !void {
 
             state.setTool(.selection);
 
-            try state.exitClipboardMode();
+            try state.exitBackgroundMode();
 
             if (state.wayland) |wayland| {
                 wayland.setAllOutputsDirty();

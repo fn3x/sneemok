@@ -36,7 +36,7 @@ pub const AppState = struct {
     mutex: std.Thread.Mutex = .{},
 
     running: std.atomic.Value(bool),
-    clipboard_mode: std.atomic.Value(bool),
+    background_mode: std.atomic.Value(bool),
 
     allocator: std.mem.Allocator,
 
@@ -57,7 +57,7 @@ pub const AppState = struct {
             .canvas = Canvas.init(allocator),
             .current_tool = Tool{ .selection = SelectionTool.init() },
             .running = std.atomic.Value(bool).init(true),
-            .clipboard_mode = std.atomic.Value(bool).init(false),
+            .background_mode = std.atomic.Value(bool).init(false),
         };
     }
 
@@ -78,8 +78,8 @@ pub const AppState = struct {
         std.log.info("Switched to tool: {s}", .{mode.toName()});
     }
 
-    pub fn enterClipboardMode(self: *AppState) void {
-        self.clipboard_mode.store(true, .release);
+    pub fn enterBackgroundMode(self: *AppState) void {
+        self.background_mode.store(true, .release);
 
         if (self.wayland) |wayland| {
             wayland.cleanupAfterCopy();
@@ -90,20 +90,20 @@ pub const AppState = struct {
             self.canvas.image_surface = null;
         }
 
-        std.log.info("Entered clipboard mode - minimal memory footprint", .{});
+        std.log.info("Entered background mode - minimal memory footprint", .{});
     }
 
-    pub fn exitClipboardMode(self: *AppState) !void {
+    pub fn exitBackgroundMode(self: *AppState) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        if (!self.clipboard_mode.load(.acquire)) return;
+        if (!self.background_mode.load(.acquire)) return;
 
-        std.log.info("Exiting clipboard mode, restoring app...", .{});
-        self.clipboard_mode.store(false, .release);
+        std.log.info("Exiting background mode, restoring app...", .{});
+        self.background_mode.store(false, .release);
 
         if (self.wayland) |wayland| {
-            try wayland.restoreAfterClipboard();
+            try wayland.restoreAfterIdle();
         }
 
         std.log.info("App restored", .{});
