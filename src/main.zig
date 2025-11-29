@@ -1,11 +1,29 @@
 const std = @import("std");
+const posix = std.posix;
 const Allocator = std.mem.Allocator;
 const c = @import("c.zig").c;
 const DBus = @import("dbus.zig").DBus;
 const AppState = @import("state.zig").AppState;
 const Wayland = @import("wayland.zig").Wayland;
 
+var shutdown_requested = std.atomic.Value(bool).init(false);
+
+fn signalHandler(sig: i32) callconv(.c) void {
+    _ = sig;
+    shutdown_requested.store(true, .release);
+}
+
 pub fn main() !void {
+    var sa = posix.Sigaction{
+        .handler = .{ .handler = signalHandler },
+        .mask = posix.sigemptyset(),
+        .flags = 0,
+    };
+
+    posix.sigaction(posix.SIG.INT, &sa, null); // Ctrl+C
+    posix.sigaction(posix.SIG.TERM, &sa, null); // kill/systemd
+    posix.sigaction(posix.SIG.HUP, &sa, null); // terminal closed
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
         const leaks = gpa.deinit();
@@ -126,19 +144,41 @@ fn runDaemon(allocator: Allocator) !void {
     };
 
     const dbus_thread = try std.Thread.spawn(.{}, dbusListenerThread, .{&context});
-    defer dbus_thread.join();
 
     while (context.state == null or context.wayland == null) {
+        if (shutdown_requested.load(.acquire)) {
+            std.log.info("Shutdown requested before initialization", .{});
+            dbus_thread.join();
+            return;
+        }
         std.Thread.sleep(10 * std.time.ns_per_ms);
     }
 
     std.log.info("State initialized, starting Wayland event loop", .{});
 
-    while (context.state.?.running.load(.acquire)) {
-        _ = context.state.?.wayland.?.display.?.dispatch();
+    while (context.state.?.running.load(.acquire) and !shutdown_requested.load(.acquire)) {
+        const wayland_fd = context.state.?.wayland.?.display.?.getFd();
+
+        _ = context.state.?.wayland.?.display.?.flush();
+
+        var pollfds = [_]posix.pollfd{
+            .{ .fd = wayland_fd, .events = posix.POLL.IN, .revents = 0 },
+        };
+
+        const ready = posix.poll(&pollfds, 100) catch break;
+
+        if (ready > 0 and pollfds[0].revents & posix.POLL.IN != 0) {
+            _ = context.state.?.wayland.?.display.?.dispatch();
+        }
     }
 
-    std.log.info("Daemon exiting", .{});
+    if (shutdown_requested.load(.acquire)) {
+        std.log.info("Shutdown signal received, cleaning up...", .{});
+    } else {
+        std.log.info("Daemon exiting normally...", .{});
+    }
+
+    dbus_thread.join();
 
     context.mutex.lock();
 
@@ -160,12 +200,14 @@ fn runDaemon(allocator: Allocator) !void {
         s.deinit();
         context.allocator.destroy(s);
     }
+
+    std.log.info("Cleanup complete", .{});
 }
 
 fn dbusListenerThread(context: *DaemonContext) void {
     std.log.info("D-Bus listener thread started", .{});
 
-    while (true) {
+    while (!shutdown_requested.load(.acquire)) {
         _ = c.dbus_connection_read_write(context.dbus.conn, 100);
 
         while (c.dbus_connection_pop_message(context.dbus.conn)) |msg| {
