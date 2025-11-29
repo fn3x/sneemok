@@ -142,7 +142,7 @@ pub const Output = struct {
 
     pub fn setOutputDirty(self: *Self) void {
         self.dirty = true;
-        if (self.frame_callback != null) {
+        if (self.frame_callback != null or self.surface == null) {
             return;
         }
 
