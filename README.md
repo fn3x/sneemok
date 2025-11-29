@@ -6,6 +6,14 @@ The main repository is on [codeberg](https://codeberg.org/fn3x/sneemok), which i
 
 Read-only mirrors exist on [github](https://github.com/fn3x/sneemok).
 
+
+## Dependencies
+
+The service automatically includes:
+- All Wayland/Cairo dependencies (from package)
+- D-Bus session bus access
+- XDG Desktop Portal (for screenshot capture)
+
 ## Installation
 
 ### Arch:
@@ -192,14 +200,6 @@ nix build
 ```bash
 zig build
 ```
-
-## Dependencies
-
-The service automatically includes:
-- wl-clipboard (for persistent clipboard via wl-copy)
-- All Wayland/Cairo dependencies (from package)
-- D-Bus session bus access
-- XDG Desktop Portal (for screenshot capture)
 
 ### Keys
 
