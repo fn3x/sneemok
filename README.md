@@ -6,46 +6,29 @@ The main repository is on [codeberg](https://codeberg.org/fn3x/sneemok), which i
 
 Read-only mirrors exist on [github](https://github.com/fn3x/sneemok).
 
-## Installation
+## Usage
 
-### NixOS (system-wide)
+### Option 1: Home Manager (Recommended for single user)
 
-```nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    sneemok.url = "github:fn3x/sneemok";
-  };
-
-  outputs = { nixpkgs, sneemok, ... }: {
-    nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
-      modules = [
-        sneemok.nixosModules.default
-        {
-          programs.sneemok.enable = true;
-        }
-      ];
-    };
-  };
-}
-```
-
-### Home Manager
+In your Home Manager configuration:
 
 ```nix
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     home-manager.url = "github:nix-community/home-manager";
     sneemok.url = "github:fn3x/sneemok";
   };
 
   outputs = { nixpkgs, home-manager, sneemok, ... }: {
     homeConfigurations.youruser = home-manager.lib.homeManagerConfiguration {
+      pkgs = nixpkgs.legacyPackages.x86_64-linux;
       modules = [
         sneemok.homeManagerModules.default
         {
-          programs.sneemok.enable = true;
+          services.sneemok = {
+            enable = true;
+          };
         }
       ];
     };
@@ -53,21 +36,138 @@ Read-only mirrors exist on [github](https://github.com/fn3x/sneemok).
 }
 ```
 
-### Direct install (no module)
+Then rebuild:
+```bash
+home-manager switch --flake .#youruser
+```
+
+### Option 2: NixOS (System-wide)
+
+In your NixOS configuration:
 
 ```nix
 {
-  inputs.sneemok.url = "github:fn3x/sneemok";
-  # Or local: sneemok.url = "path:/path/to/sneemok";
+  inputs = {
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    sneemok.url = "github:fn3x/sneemok";
+  };
 
-  outputs = { sneemok, ... }: {
-    # NixOS
-    environment.systemPackages = [ sneemok.packages.x86_64-linux.default ];
-    
-    # Or Home Manager
-    home.packages = [ sneemok.packages.x86_64-linux.default ];
+  outputs = { nixpkgs, sneemok, ... }: {
+    nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        sneemok.nixosModules.default
+        {
+          services.sneemok = {
+            enable = true;
+          };
+        }
+      ];
+    };
   };
 }
+```
+
+Then rebuild:
+```bash
+sudo nixos-rebuild switch --flake .#yourhostname
+```
+
+## Managing the Service
+
+### Start/Stop/Status
+
+Home Manager (user service):
+```bash
+systemctl --user start sneemok
+systemctl --user stop sneemok
+systemctl --user status sneemok
+systemctl --user restart sneemok
+```
+
+View logs:
+```bash
+journalctl --user -u sneemok -f
+```
+
+### Taking Screenshots
+
+Once the service is running:
+
+```bash
+# Trigger a screenshot
+sneemok --screenshot
+
+# Or just
+sneemok
+```
+
+### Keybindings
+
+Add to your compositor config (e.g., Hyprland):
+
+```
+bind = $mainMod, P, exec, sneemok
+bind = $mainMod SHIFT, P, exec, sneemok --screenshot
+```
+
+Or in sway/i3:
+
+```
+bindsym $mod+p exec sneemok
+bindsym $mod+Shift+p exec sneemok --screenshot
+```
+
+## Troubleshooting
+
+**Service won't start:**
+```bash
+# Check logs
+journalctl --user -u sneemok -n 50
+
+# Check if D-Bus session bus is available
+echo $DBUS_SESSION_BUS_ADDRESS
+
+# Check if compositor is running
+echo $WAYLAND_DISPLAY
+```
+
+**Screenshots not triggering:**
+```bash
+# Test D-Bus connection manually
+dbus-send --session --print-reply \
+  --dest=org.sneemok.Service \
+  /org/sneemok/service \
+  org.sneemok.Service.Screenshot
+```
+
+**Service keeps restarting:**
+```bash
+# Check what's failing
+systemctl --user status sneemok
+journalctl --user -u sneemok -f
+```
+
+Common issues:
+- XDG Desktop Portal not available → Install xdg-desktop-portal-hyprland or equivalent
+- Compositor not running → Service requires graphical session
+- D-Bus session bus not available → Check session setup
+
+## Disabling the Service
+
+Home Manager:
+```nix
+services.sneemok.enable = false;
+```
+
+NixOS:
+```nix
+services.sneemok.enable = false;
+```
+
+Or manually:
+```bash
+systemctl --user disable --now sneemok
 ```
 
 ### Build from source
@@ -96,16 +196,13 @@ nix build
 zig build
 ```
 
-**Dependencies:**
-- wl-roots compositor
-- cairo (usually included in most Linux distributions)
-- wl-clipboard (optional but recommended)
+## Dependencies
 
-## Usage
-
-```bash
-./sneemok
-```
+The service automatically includes:
+- wl-clipboard (for persistent clipboard via wl-copy)
+- All Wayland/Cairo dependencies (from package)
+- D-Bus session bus access
+- XDG Desktop Portal (for screenshot capture)
 
 ### Keys
 
@@ -129,8 +226,10 @@ zig build
 
 ```
 src/
-├── main.zig        # Events
-├── state.zig       # State
+├── main.zig        # Events, signals and threading of the D-Bus handler
+├── state.zig       # Application state
+├── wayland.zig     # Wayland-related objects
+├── dbus.zig        # Dbus struct with connection initialization, requesting and parsing screenshot from portal
 ├── output.zig      # Rendering
 ├── canvas/         # Image + elements
 └── tools/          # Selection + drawing tools

@@ -9,13 +9,12 @@
 , pkg-config
 , cairo
 , dbus
-, libxkbcommon
 , wlroots
 }:
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "sneemok";
-  version = "0.1.0";
+  version = "0.2.0";
 
   src = ../.;
 
@@ -30,7 +29,6 @@ stdenv.mkDerivation (finalAttrs: {
     wayland
     pkg-config
     dbus
-    libxkbcommon
     wlroots
     wlr-protocols
     cairo

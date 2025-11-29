@@ -1,7 +1,7 @@
 .{
     .name = .sneemok,
-    .version = "0.1.0",
-    .fingerprint = 0x573213255d073bb2,
+    .version = "0.2.0",
+    .fingerprint = 0x57321325beb25664,
     .minimum_zig_version = "0.15.1",
     .dependencies = .{
         .wayland = .{

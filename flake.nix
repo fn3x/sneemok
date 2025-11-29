@@ -5,68 +5,61 @@
 
   outputs = { self, nixpkgs }:
     let
-      system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
+      forAllSystems = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ];
     in
       {
-      packages.${system}.default = pkgs.callPackage ./nix/package.nix { };
+      packages = forAllSystems (system: {
+        default = nixpkgs.legacyPackages.${system}.callPackage ./nix/package.nix { };
+      });
 
-      apps.${system}.default = {
-        type = "app";
-        program = "${self.packages.${system}.default}/bin/sneemok";
-      };
+      apps = forAllSystems (system: {
+        default = {
+          type = "app";
+          program = "${self.packages.${system}.default}/bin/sneemok";
+        };
+      });
 
-      devShells.${system}.default = pkgs.mkShell {
-        packages = with pkgs; [ zig ];
-        buildInputs = with pkgs; [
-          wayland-scanner
-          wayland-protocols
-          wayland
-          pkg-config
-          dbus
-          wlroots
-          wlr-protocols
-          cairo
-        ];
-      };
+      devShells = forAllSystems (system: 
+        let pkgs = nixpkgs.legacyPackages.${system};
+        in {
+          default = pkgs.mkShell {
+            packages = with pkgs; [ zig ];
+            buildInputs = with pkgs; [
+              wayland-scanner
+              wayland-protocols
+              wayland
+              pkg-config
+              dbus
+              wlroots
+              wlr-protocols
+              cairo
+            ];
+          };
+        });
 
       nixosModules.default = { config, lib, pkgs, ... }:
-        with lib;
         let
-          cfg = config.programs.sneemok;
+          cfg = config.services.sneemok;
+          sneemokPkg = self.packages.${pkgs.system}.default;
         in
           {
-          options.programs.sneemok = {
-            enable = mkEnableOption "sneemok screenshot tool";
-            package = mkOption {
-              type = types.package;
-              default = self.packages.${system}.default;
-              description = "The sneemok package to use";
-            };
-          };
+          imports = [ ./nix/nixos-module.nix ];
 
-          config = mkIf cfg.enable {
-            environment.systemPackages = [ cfg.package ];
+          config = lib.mkIf cfg.enable {
+            services.sneemok.package = lib.mkDefault sneemokPkg;
           };
         };
 
       homeManagerModules.default = { config, lib, pkgs, ... }:
-        with lib;
         let
-          cfg = config.programs.sneemok;
+          cfg = config.services.sneemok;
+          sneemokPkg = self.packages.${pkgs.system}.default;
         in
           {
-          options.programs.sneemok = {
-            enable = mkEnableOption "sneemok screenshot tool";
-            package = mkOption {
-              type = types.package;
-              default = self.packages.${system}.default;
-              description = "The sneemok package to use";
-            };
-          };
+          imports = [ ./nix/hm-module.nix ];
 
-          config = mkIf cfg.enable {
-            home.packages = [ cfg.package ];
+          config = lib.mkIf cfg.enable {
+            services.sneemok.package = lib.mkDefault sneemokPkg;
           };
         };
     };
