@@ -62,7 +62,7 @@ steps:
         from_secret: git_email
     commands:
       - pacman -Syu --noconfirm
-      - pacman -S --needed --noconfirm base-devel git openssh sudo
+      - pacman -S --needed --noconfirm base-devel git openssh sudo wget
 
       - mkdir -p ~/.ssh
       - echo "$AUR_SSH_KEY" > ~/.ssh/aur
