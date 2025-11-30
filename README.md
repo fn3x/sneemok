@@ -135,7 +135,7 @@ bind = $mainMod, P, exec, sneemok
 bind = $mainMod SHIFT, P, exec, sneemok --screenshot
 ```
 
-Or in sway/i3:
+Or in sway:
 
 ```
 bindsym $mod+p exec sneemok
