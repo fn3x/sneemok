@@ -5,6 +5,9 @@ steps:
   prepare-release:
     image: archlinux:latest
     commands:
+      - pacman-key --init
+      - pacman-key --populate archlinux
+
       - pacman -Syu --noconfirm
       - pacman -S --needed --noconfirm base-devel git zig wayland wlroots pixman wayland-protocols cairo dbus libxkbcommon pkg-config tar
 
