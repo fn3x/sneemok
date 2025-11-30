@@ -125,7 +125,7 @@ steps:
 
       - wget "https://codeberg.org/fn3x/sneemok/archive/${CI_COMMIT_TAG}.tar.gz" -O "sneemok-$VERSION.tar.gz"
       - export SHA256=$(sha256sum "sneemok-$VERSION.tar.gz" | awk '{print $1}')
-      - echo "SHA256: $SHA256"
+      - echo "SHA256 $SHA256"
 
       - sed -i "s/pkgver=.*/pkgver=$VERSION/" PKGBUILD
       - sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD
