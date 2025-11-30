@@ -2,22 +2,11 @@ when:
   event: [push, tag, pull_request]
 
 steps:
-  build-test:
-    image: archlinux:latest
-    commands:
-      - pacman -Syu --noconfirm
-      - pacman -S --needed --noconfirm base-devel git zig wayland wayland-protocols cairo dbus libxkbcommon pkg-config
-      - zig build
-      - zig build -Doptimize=ReleaseSafe
-      - ls -lh zig-out/bin/sneemok
-    when:
-      event: [push, pull_request]
-
   prepare-release:
     image: archlinux:latest
     commands:
       - pacman -Syu --noconfirm
-      - pacman -S --needed --noconfirm base-devel git zig wayland wayland-protocols cairo dbus libxkbcommon pkg-config tar
+      - pacman -S --needed --noconfirm base-devel git zig wayland wlroots pixman wayland-protocols cairo dbus libxkbcommon pkg-config tar
 
       - zig build -Doptimize=ReleaseSafe
 
