@@ -10,7 +10,7 @@ steps:
 
       - pacman -Sy --noconfirm archlinux-keyring
       - pacman -Syu --noconfirm
-      - pacman -S --needed --noconfirm base-devel git zig wayland wlroots pixman wayland-protocols cairo dbus libxkbcommon pkg-config tar
+      - pacman -S --needed --noconfirm base-devel git zig wayland wlroots0.19 wayland-protocols cairo dbus libxkbcommon pkg-config tar
 
       - zig build -Doptimize=ReleaseSafe
 
