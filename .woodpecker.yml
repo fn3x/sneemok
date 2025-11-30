@@ -8,6 +8,7 @@ steps:
       - pacman-key --init
       - pacman-key --populate archlinux
 
+      - pacman -Sy --noconfirm archlinux-keyring
       - pacman -Syu --noconfirm
       - pacman -S --needed --noconfirm base-devel git zig wayland wlroots pixman wayland-protocols cairo dbus libxkbcommon pkg-config tar
 
