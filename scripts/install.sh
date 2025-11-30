@@ -405,8 +405,8 @@ show_usage() {
 	echo "  PREFIX=/opt/sneemok $0       # Install to /opt/sneemok"
 	echo ""
 	echo "After installation:"
-	echo "  sneemok --daemon             # Start daemon"
-	echo "  sneemok --screenshot         # Take screenshot"
+	echo "  sneemok --daemon                       # Start daemon"
+	echo "  sneemok --screenshot                   # Take screenshot"
 	echo "  systemctl --user enable --now sneemok  # Enable service"
 }
 
