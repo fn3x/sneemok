@@ -2,7 +2,7 @@ when:
   event: [push, tag, pull_request]
 
 steps:
-  build:
+  build-test:
     image: archlinux:latest
     commands:
       - pacman -Syu --noconfirm
@@ -13,7 +13,7 @@ steps:
     when:
       event: [push, pull_request]
 
-  release-artifacts:
+  prepare-release:
     image: archlinux:latest
     commands:
       - pacman -Syu --noconfirm
@@ -30,11 +30,7 @@ steps:
       - cp README.md sneemok-$VERSION-x86_64-linux/ || echo "No README file"
       - tar czf sneemok-$VERSION-x86_64-linux.tar.gz sneemok-$VERSION-x86_64-linux/
 
-      - git archive --format=tar.gz --prefix=sneemok-$VERSION/ HEAD -o sneemok-$VERSION-source.tar.gz
-
-      - sha256sum sneemok-$VERSION-*.tar.gz > checksums.txt
-
-      - ls -lh *.tar.gz
+      - sha256sum sneemok-$VERSION-x86_64-linux.tar.gz > checksums.txt
       - cat checksums.txt
     when:
       event: tag
@@ -46,7 +42,7 @@ steps:
         from_secret: gitea_token
       base_url: https://codeberg.org
       files:
-        - "*.tar.gz"
+        - "sneemok-*-x86_64-linux.tar.gz"
         - checksums.txt
       title: ${CI_COMMIT_TAG}
       note: |
@@ -54,41 +50,11 @@ steps:
 
         ## Installation
 
-        ### Download Binary
-
+        **Binary:**
         ```bash
-        wget https://codeberg.org/fn3x/sneemok/releases/download/${CI_COMMIT_TAG}/sneemok-${CI_COMMIT_TAG#v}-x86_64-linux.tar.gz
-        tar xzf sneemok-${CI_COMMIT_TAG#v}-x86_64-linux.tar.gz
-        cd sneemok-${CI_COMMIT_TAG#v}-x86_64-linux
-        sudo install -m 755 sneemok /usr/local/bin/
+        wget https://codeberg.org/fn3x/sneemok/releases/download/${CI_COMMIT_TAG}/sneemok-${CI_COMMIT_TAG}-x86_64-linux.tar.gz
+        tar xzf sneemok-${CI_COMMIT_TAG}-x86_64-linux.tar.gz
         ```
-
-        ### NixOS
-
-        ```nix
-        inputs.sneemok.url = "https://codeberg.org/fn3x/sneemok/${CI_COMMIT_TAG}";
-        services.sneemok.enable = true;
-        ```
-
-        ### Arch Linux (AUR)
-
-        ```bash
-        paru -S sneemok
-        ```
-
-        ### Build from Source
-
-        ```bash
-        wget https://codeberg.org/fn3x/sneemok/releases/download/${CI_COMMIT_TAG}/sneemok-${CI_COMMIT_TAG#v}-source.tar.gz
-        tar xzf sneemok-${CI_COMMIT_TAG#v}-source.tar.gz
-        cd sneemok-${CI_COMMIT_TAG#v}
-        zig build -Doptimize=ReleaseSafe
-        sudo install -m 755 zig-out/bin/sneemok /usr/local/bin/
-        ```
-
-        ## Checksums
-
-        See checksums.txt for SHA256 hashes.
     when:
       event: tag
 
@@ -103,7 +69,7 @@ steps:
         from_secret: git_email
     commands:
       - pacman -Syu --noconfirm
-      - pacman -S --needed --noconfirm git openssh
+      - pacman -S --needed --noconfirm base-devel git openssh sudo
 
       - mkdir -p ~/.ssh
       - echo "$AUR_SSH_KEY" > ~/.ssh/aur
@@ -112,7 +78,6 @@ steps:
       - echo "  IdentityFile ~/.ssh/aur" >> ~/.ssh/config
       - echo "  User aur" >> ~/.ssh/config
       - chmod 600 ~/.ssh/config
-
       - ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
 
       - export VERSION=${CI_COMMIT_TAG#v}
@@ -125,15 +90,13 @@ steps:
 
       - wget "https://codeberg.org/fn3x/sneemok/archive/${CI_COMMIT_TAG}.tar.gz" -O "sneemok-$VERSION.tar.gz"
       - export SHA256=$(sha256sum "sneemok-$VERSION.tar.gz" | awk '{print $1}')
-      - echo "SHA256 $SHA256"
+      - echo "Calculated SHA256 $SHA256"
 
       - sed -i "s/pkgver=.*/pkgver=$VERSION/" PKGBUILD
       - sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD
-      - sed -i "s|url=.*|url=\"https://codeberg.org/fn3x/sneemok\"|" PKGBUILD
       - sed -i "s|source=.*|source=(\"sneemok-$VERSION.tar.gz::https://codeberg.org/fn3x/sneemok/archive/${CI_COMMIT_TAG}.tar.gz\")|" PKGBUILD
       - sed -i "s/sha256sums=.*/sha256sums=('$SHA256')/" PKGBUILD
 
-      - pacman -S --needed --noconfirm base-devel
       - useradd -m builder
       - chown -R builder:builder .
       - sudo -u builder makepkg --printsrcinfo > .SRCINFO
@@ -141,7 +104,6 @@ steps:
       - git add PKGBUILD .SRCINFO
       - git commit -m "Update to $VERSION"
       - git push origin master
-
-      - echo "AUR package updated to $VERSION"
+      - echo "AUR package updated."
     when:
       event: tag
