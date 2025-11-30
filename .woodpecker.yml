@@ -31,9 +31,9 @@ steps:
   forgejo-release:
     image: woodpeckerci/plugin-release
     settings:
-      api_key:
+      api-key:
         from_secret: gitea_token
-      base_url: https://codeberg.org
+      base-url: https://codeberg.org
       files:
         - "sneemok-*-x86_64-linux.tar.gz"
         - checksums.txt
