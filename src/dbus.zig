@@ -35,7 +35,7 @@ pub const DBus = struct {
 
         defer c.dbus_message_unref(msg);
 
-        const reply = c.dbus_connection_send_with_reply_and_block(self.conn, msg, 1000, null);
+        const reply = c.dbus_connection_send_with_reply_and_block(self.conn, msg, -1, null);
         if (reply == null) {
             return error.NoReply;
         }
