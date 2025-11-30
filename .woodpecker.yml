@@ -29,7 +29,7 @@ steps:
       event: tag
 
   forgejo-release:
-    image: woodpeckerci/plugin-gitea-release
+    image: woodpeckerci/plugin-release
     settings:
       api_key:
         from_secret: gitea_token
