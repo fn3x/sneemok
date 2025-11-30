@@ -65,7 +65,7 @@ steps:
       - pacman -S --needed --noconfirm base-devel git openssh sudo wget
 
       - mkdir -p ~/.ssh
-      - echo "$AUR_SSH_KEY" > ~/.ssh/aur
+      - echo "$${AUR_SSH_KEY}" > ~/.ssh/aur
       - chmod 600 ~/.ssh/aur
       - echo "Host aur.archlinux.org" > ~/.ssh/config
       - echo "  IdentityFile ~/.ssh/aur" >> ~/.ssh/config
@@ -79,8 +79,8 @@ steps:
       - cd aur-repo
 
       - git config --global --add safe.directory /woodpecker/src/codeberg.org/fn3x/sneemok/aur-repo
-      - git config user.name "${GIT_USERNAME}"
-      - git config user.email "${GIT_EMAIL}"
+      - git config user.name "$${GIT_USERNAME}"
+      - git config user.email "$${GIT_EMAIL}"
 
       - wget "https://codeberg.org/fn3x/sneemok/archive/${CI_COMMIT_TAG}.tar.gz" -O "sneemok-$VERSION.tar.gz"
       - export SHA256=$(sha256sum "sneemok-$VERSION.tar.gz" | awk '{print $1}')
