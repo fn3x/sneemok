@@ -8,13 +8,21 @@ Read-only mirrors exist on [github](https://github.com/fn3x/sneemok).
 
 
 ## Dependencies
-
-The service automatically includes:
-- All Wayland/Cairo dependencies (from package)
-- D-Bus session bus access
+- [wayland](https://wayland.freedesktop.org/) (compositor)
+- [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots) (compositor)
+- [cairo](https://www.cairographics.org/) (drawing)
+- [D-Bus](https://gitlab.freedesktop.org/dbus/dbus) (communication with portal and sneemok daemon)
 - XDG Desktop Portal (for screenshot capture)
 
 ## Installation
+
+### Convenient script:
+
+```bash
+wget https://codeberg.org/fn3x/sneemok/raw/branch/main/scripts/install.sh
+chmod +x install.sh
+./install.sh
+```
 
 ### Arch:
 
@@ -94,7 +102,6 @@ sudo nixos-rebuild switch --flake .#yourhostname
 
 ### Start/Stop/Status
 
-Home Manager (user service):
 ```bash
 systemctl --user start sneemok
 systemctl --user stop sneemok
@@ -172,6 +179,11 @@ Common issues:
 
 ## Disabling the Service
 
+Manually:
+```bash
+systemctl --user disable --now sneemok
+```
+
 Home Manager:
 ```nix
 services.sneemok.enable = false;
@@ -182,14 +194,7 @@ NixOS:
 services.sneemok.enable = false;
 ```
 
-Or manually:
-```bash
-systemctl --user disable --now sneemok
-```
-
 ### Build from source
-
-## Build
 
 **With Nix:**
 ```bash
