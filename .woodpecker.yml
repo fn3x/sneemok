@@ -9,7 +9,6 @@ steps:
       - pacman-key --populate archlinux
 
       - pacman -Syu --noconfirm
-      - pacman -Sy
       - pacman -S --needed --noconfirm base-devel git zig wayland wlroots pixman wayland-protocols cairo dbus libxkbcommon pkg-config tar
 
       - zig build -Doptimize=ReleaseSafe
