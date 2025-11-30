@@ -78,6 +78,7 @@ steps:
       - git clone ssh://aur@aur.archlinux.org/sneemok.git aur-repo
       - cd aur-repo
 
+      - git config --global --add safe.directory /woodpecker/src/codeberg.org/fn3x/sneemok/aur-repo
       - git config user.name "${GIT_USERNAME}"
       - git config user.email "${GIT_EMAIL}"
 
