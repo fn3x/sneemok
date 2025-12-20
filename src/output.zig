@@ -5,13 +5,15 @@ const Buffer = @import("buffer.zig");
 const AppState = @import("state.zig").AppState;
 
 const wl = wayland.client.wl;
+const wp = wayland.client.wp;
 const zwlr = wayland.client.zwlr;
 
 pub const Output = struct {
     wl_output: ?*wl.Output = null,
     state: ?*AppState = null,
 
-    scale: i32 = 1,
+    scale: f32 = 1.0,
+    buffer_scale: i32 = 1.0,
     geometry: struct {
         x: i32 = 0,
         y: i32 = 0,
@@ -21,6 +23,9 @@ pub const Output = struct {
 
     surface: ?*wl.Surface = null,
     layer_surface: ?*zwlr.LayerSurfaceV1 = null,
+    fractional_scale: ?*wp.FractionalScaleV1 = null,
+    viewport: ?*wp.Viewport = null,
+    scale_ready: bool = false,
 
     frame_callback: ?*wl.Callback = null,
     configured: bool = false,
@@ -37,111 +42,80 @@ pub const Output = struct {
         const buffer = self.current_buffer orelse return;
         const cr = buffer.cairo orelse return;
 
+        const s: f64 = @floatCast(self.scale);
+        const phys_x = @as(f64, @floatFromInt(self.geometry.x)) * s;
+        const phys_y = @as(f64, @floatFromInt(self.geometry.y)) * s;
+
         c.cairo_identity_matrix(cr);
-        c.cairo_scale(cr, @floatFromInt(self.scale), @floatFromInt(self.scale));
 
-        const img_x = self.geometry.x;
-        const img_y = self.geometry.y;
-        const img_w = self.geometry.width;
-        const img_h = self.geometry.height;
-
-        if (img_x < state.canvas.width and img_y < state.canvas.height) {
-            const src_x = @max(0, img_x);
-            const src_y = @max(0, img_y);
-            const src_w = @min(state.canvas.width - src_x, img_w);
-            const src_h = @min(state.canvas.height - src_y, img_h);
-
-            if (src_w > 0 and src_h > 0) {
-                if (state.canvas.image_surface) |img_surface| {
-                    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
-                    c.cairo_set_source_surface(cr, img_surface, @floatFromInt(-img_x), @floatFromInt(-img_y));
-                    c.cairo_paint(cr);
-                }
-            }
+        // 1. Background
+        if (state.canvas.image_surface) |img_surface| {
+            c.cairo_save(cr);
+            c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+            c.cairo_set_source_surface(cr, img_surface, -phys_x, -phys_y);
+            c.cairo_paint(cr);
+            c.cairo_restore(cr);
         }
 
+        // 2. Dark Overlay
         c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
         c.cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.50);
         c.cairo_paint(cr);
 
-        if (state.current_tool == .selection) {
-            const sel_tool = &state.current_tool.selection;
+        // 3. Clear Selection (Punch through)
+        if (state.canvas.image_surface) |img_surface| {
+            var active_sel: ?struct { x: i32, y: i32, w: i32, h: i32 } = null;
+            if (state.current_tool == .selection and state.current_tool.selection.is_selecting) {
+                const tool = state.current_tool.selection;
+                active_sel = .{
+                    .x = @min(tool.anchor_x, tool.last_pointer_x),
+                    .y = @min(tool.anchor_y, tool.last_pointer_y),
+                    .w = @intCast(@abs(tool.last_pointer_x - tool.anchor_x)),
+                    .h = @intCast(@abs(tool.last_pointer_y - tool.anchor_y)),
+                };
+            } else if (state.canvas.selection) |sel| {
+                active_sel = .{ .x = sel.x, .y = sel.y, .w = sel.width, .h = sel.height };
+            }
 
-            if (sel_tool.is_selecting) {
-                const sel_x = @min(sel_tool.anchor_x, sel_tool.last_pointer_x);
-                const sel_y = @min(sel_tool.anchor_y, sel_tool.last_pointer_y);
-                const sel_w = @abs(sel_tool.last_pointer_x - sel_tool.anchor_x) + 1;
-                const sel_h = @abs(sel_tool.last_pointer_y - sel_tool.anchor_y) + 1;
+            if (active_sel) |sel| {
+                c.cairo_save(cr);
+                c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+                // Must use physical offsets and identity matrix to stay 1:1
+                c.cairo_set_source_surface(cr, img_surface, -phys_x, -phys_y);
 
-                const local_x: u32 = @intCast(sel_x - self.geometry.x);
-                const local_y: u32 = @intCast(sel_y - self.geometry.y);
+                const rect_x = @as(f64, @floatFromInt(sel.x - self.geometry.x)) * s;
+                const rect_y = @as(f64, @floatFromInt(sel.y - self.geometry.y)) * s;
+                const rect_w = @as(f64, @floatFromInt(sel.w)) * s;
+                const rect_h = @as(f64, @floatFromInt(sel.h)) * s;
 
-                if (sel_w >= 1 and sel_h >= 1 and
-                    local_x < self.width and local_y < self.height and
-                    local_x + sel_w > 0 and local_y + sel_h > 0)
-                {
-                    if (state.canvas.image_surface) |img_surface| {
-                        c.cairo_save(cr);
-                        c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
-                        c.cairo_set_source_surface(cr, img_surface, @floatFromInt(-img_x), @floatFromInt(-img_y));
-                        c.cairo_rectangle(cr, @floatFromInt(local_x), @floatFromInt(local_y), @floatFromInt(sel_w), @floatFromInt(sel_h));
-                        c.cairo_fill(cr);
-                        c.cairo_restore(cr);
-
-                        c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.5);
-                        c.cairo_set_line_width(cr, 2.0);
-                        c.cairo_rectangle(cr, @floatFromInt(local_x), @floatFromInt(local_y), @floatFromInt(sel_w), @floatFromInt(sel_h));
-                        c.cairo_stroke(cr);
-                    }
-                }
+                c.cairo_rectangle(cr, rect_x, rect_y, rect_w, rect_h);
+                c.cairo_fill(cr);
+                c.cairo_restore(cr);
             }
         }
 
+        // 4. UI Scaling
+        c.cairo_scale(cr, s, s);
+
+        // 5. Tool Borders and Elements
         if (state.canvas.selection) |sel| {
-            if (state.canvas.image_surface) |img_surface| {
-                const local_x = sel.x - self.geometry.x;
-                const local_y = sel.y - self.geometry.y;
-
-                if (sel.width >= 1 and sel.height >= 1 and
-                    local_x < self.width and local_y < self.height and
-                    local_x + sel.width > 0 and local_y + sel.height > 0)
-                {
-                    c.cairo_save(cr);
-                    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
-                    c.cairo_set_source_surface(cr, img_surface, @floatFromInt(-img_x), @floatFromInt(-img_y));
-                    c.cairo_rectangle(
-                        cr,
-                        @floatFromInt(local_x),
-                        @floatFromInt(local_y),
-                        @floatFromInt(sel.width),
-                        @floatFromInt(sel.height),
-                    );
-                    c.cairo_fill(cr);
-                    c.cairo_restore(cr);
-
-                    c.cairo_set_source_rgba(cr, 0.0, 1.0, 0.0, 1.0);
-                    c.cairo_set_line_width(cr, 1.0);
-                    c.cairo_rectangle(
-                        cr,
-                        @floatFromInt(local_x),
-                        @floatFromInt(local_y),
-                        @floatFromInt(sel.width),
-                        @floatFromInt(sel.height),
-                    );
-                    c.cairo_stroke(cr);
-                }
-            }
+            const local_x: f64 = @floatFromInt(sel.x - self.geometry.x);
+            const local_y: f64 = @floatFromInt(sel.y - self.geometry.y);
+            c.cairo_set_source_rgba(cr, 0.0, 1.0, 0.0, 1.0);
+            c.cairo_set_line_width(cr, 1.0 / s); // Keeps border thin on HiDPI
+            c.cairo_rectangle(cr, local_x, local_y, @floatFromInt(sel.width), @floatFromInt(sel.height));
+            c.cairo_stroke(cr);
         }
 
         for (state.canvas.elements.items) |*element| {
             element.render(cr, self.geometry.x, self.geometry.y);
         }
-
         state.current_tool.render(cr, &state.canvas, self.geometry.x, self.geometry.y);
     }
 
     pub fn setOutputDirty(self: *Self) void {
         self.dirty = true;
+
         if (self.frame_callback != null or self.surface == null) {
             return;
         }
@@ -158,8 +132,25 @@ pub const Output = struct {
             return;
         }
 
-        const buffer_width = self.width * self.scale;
-        const buffer_height = self.height * self.scale;
+        // --- The Anti-Flicker Fix ---
+        // If we have a fractional scale manager but haven't received the event yet,
+        // attach a 1x1 dummy buffer to "poke" the compositor to send the scale.
+        if (!self.scale_ready and state.wayland.?.fractional_scale_manager != null) {
+            const dummy = Buffer.getNextBuffer(state.wayland.?.shm.?, &self.buffers, 1, 1) orelse return;
+
+            if (dummy.cairo) |cr| {
+                c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+                c.cairo_set_source_rgba(cr, 0, 0, 0, 0);
+                c.cairo_paint(cr);
+            }
+
+            self.surface.?.attach(dummy.buffer, 0, 0);
+            self.surface.?.commit();
+            return;
+        }
+
+        const buffer_width: i32 = @intFromFloat(@round(@as(f32, @floatFromInt(self.width)) * self.scale));
+        const buffer_height: i32 = @intFromFloat(@round(@as(f32, @floatFromInt(self.height)) * self.scale));
 
         self.current_buffer = Buffer.getNextBuffer(
             state.wayland.?.shm.?,
@@ -177,7 +168,12 @@ pub const Output = struct {
 
         self.surface.?.attach(self.current_buffer.?.buffer, 0, 0);
         self.surface.?.damage(0, 0, self.width, self.height);
-        self.surface.?.setBufferScale(self.scale);
+        self.surface.?.setBufferScale(1);
+
+        if (self.viewport) |viewport| {
+            viewport.setDestination(self.width, self.height);
+        }
+
         self.surface.?.commit();
         self.dirty = false;
     }

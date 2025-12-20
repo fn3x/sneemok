@@ -5,6 +5,7 @@ const Output = @import("output.zig").Output;
 
 const Allocator = std.mem.Allocator;
 const wl = WaylandLib.client.wl;
+const wp = WaylandLib.client.wp;
 const zwlr = WaylandLib.client.zwlr;
 
 const EventInterfaces = enum {
@@ -14,6 +15,8 @@ const EventInterfaces = enum {
     wl_seat,
     zwlr_layer_shell_v1,
     wl_data_device_manager,
+    wp_fractional_scale_manager_v1,
+    wp_viewporter,
 };
 
 pub const KeyboardModifiers = struct {
@@ -40,6 +43,8 @@ pub const Wayland = struct {
     cursor_surface: ?*wl.Surface = null,
     layer_shell: ?*zwlr.LayerShellV1 = null,
     data_device_manager: ?*wl.DataDeviceManager = null,
+    fractional_scale_manager: ?*wp.FractionalScaleManagerV1 = null,
+    viewporter: ?*wp.Viewporter = null,
     data_device: ?*wl.DataDevice = null,
     data_source: ?*wl.DataSource = null,
     keyboard_modifiers: KeyboardModifiers = .{ .alt = false, .ctrl = false, .shift = false, .super = false },
@@ -58,6 +63,8 @@ pub const Wayland = struct {
 
     pub fn deinit(self: *Self) void {
         for (self.outputs.items) |output| {
+            if (output.fractional_scale) |fs| fs.destroy();
+            if (output.viewport) |viewport| viewport.destroy();
             if (output.layer_surface) |ls| ls.destroy();
             if (output.surface) |surf| surf.destroy();
             if (output.wl_output) |wo| wo.release();
@@ -72,6 +79,8 @@ pub const Wayland = struct {
         if (self.seat) |seat| seat.release();
         if (self.data_device) |dd| dd.release();
         if (self.data_device_manager) |ddm| ddm.destroy();
+        if (self.fractional_scale_manager) |fsm| fsm.destroy();
+        if (self.viewporter) |viewporter| viewporter.destroy();
 
         if (self.layer_shell) |ls| ls.destroy();
         if (self.shm) |shm| shm.destroy();
@@ -88,6 +97,14 @@ pub const Wayland = struct {
             if (output.layer_surface) |ls| {
                 ls.destroy();
                 output.layer_surface = null;
+            }
+            if (output.fractional_scale) |fs| {
+                fs.destroy();
+                output.fractional_scale = null;
+            }
+            if (output.viewport) |viewport| {
+                viewport.destroy();
+                output.viewport = null;
             }
             if (output.surface) |surf| {
                 surf.destroy();
@@ -142,6 +159,11 @@ pub const Wayland = struct {
             output.layer_surface.?.setExclusiveZone(-1);
             output.layer_surface.?.setKeyboardInteractivity(.exclusive);
 
+            output.viewport = try self.viewporter.?.getViewport(output.surface.?);
+
+            output.fractional_scale = try self.fractional_scale_manager.?.getFractionalScale(output.surface.?);
+            output.fractional_scale.?.setListener(*Output, fractionalScaleListener, output);
+
             output.surface.?.commit();
         }
 
@@ -191,6 +213,11 @@ pub const Wayland = struct {
             output.layer_surface.?.setAnchor(.{ .top = true, .bottom = true, .left = true, .right = true });
             output.layer_surface.?.setExclusiveZone(-1);
             output.layer_surface.?.setKeyboardInteractivity(.exclusive);
+
+            output.viewport = try self.viewporter.?.getViewport(output.surface.?);
+
+            output.fractional_scale = try self.fractional_scale_manager.?.getFractionalScale(output.surface.?);
+            output.fractional_scale.?.setListener(*Output, fractionalScaleListener, output);
 
             output.surface.?.commit();
         }
@@ -282,6 +309,22 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, wayland: *
                     ) catch @panic("Failed to bind wl_data_device_manager");
                     std.log.info("Binded wl_data_device_manager", .{});
                 },
+                .wp_fractional_scale_manager_v1 => {
+                    wayland.fractional_scale_manager = registry.bind(
+                        global.name,
+                        wp.FractionalScaleManagerV1,
+                        wp.FractionalScaleManagerV1.generated_version,
+                    ) catch @panic("Failed to bind wp_fractional_scale_manager_v1");
+                    std.log.info("Binded wp_fractional_scale_manager_v1", .{});
+                },
+                .wp_viewporter => {
+                    wayland.viewporter = registry.bind(
+                        global.name,
+                        wp.Viewporter,
+                        wp.Viewporter.generated_version,
+                    ) catch @panic("Failed to bind viewporter");
+                    std.log.info("Binded viewporter", .{});
+                },
             }
         },
         .global_remove => {},
@@ -303,7 +346,14 @@ fn outputListener(_: *wl.Output, event: wl.Output.Event, output: *Output) void {
             }
         },
         .scale => |scale| {
-            output.scale = scale.factor;
+            std.log.debug("Got wl_output scale: {}", .{scale});
+            if (output.state.?.wayland.?.fractional_scale_manager == null) {
+                output.scale = @floatFromInt(scale.factor);
+                output.buffer_scale = 1;
+                output.scale_ready = true;
+            } else {
+                std.log.debug("Ignoring wl_output scale in favor of fraction_scale", .{});
+            }
         },
         .done => {},
         else => {},
@@ -511,6 +561,22 @@ fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, s
         },
         else => |ev| {
             std.log.debug("wl_data_source::event {}", .{ev});
+        },
+    }
+}
+
+fn fractionalScaleListener(_: *wp.FractionalScaleV1, event: wp.FractionalScaleV1.Event, output: *Output) void {
+    switch (event) {
+        .preferred_scale => |preferred| {
+            output.scale = @as(f32, @floatFromInt(preferred.scale)) / 120.0;
+            output.buffer_scale = @intFromFloat(@ceil(output.scale));
+            std.log.info("Got fractional_scale: {d}. Divided by 120: {d}", .{ preferred.scale, output.scale });
+
+            output.scale_ready = true;
+
+            if (output.configured) {
+                output.sendFrame();
+            }
         },
     }
 }
