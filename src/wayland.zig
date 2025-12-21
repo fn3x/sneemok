@@ -547,7 +547,12 @@ fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, s
                         std.log.err("Failed to write cached PNG: {}", .{err});
                     };
                 } else {
-                    state.canvas.writeToPngFd(send.fd) catch |err| {
+                    const scale = if (state.wayland.?.outputs.items.len > 0)
+                        state.wayland.?.outputs.items[0].scale
+                    else
+                        1.0;
+
+                    state.canvas.writeToPngFd(send.fd, scale) catch |err| {
                         std.log.err("Error on writing selection to png fd {}", .{err});
                     };
                 }
@@ -586,7 +591,12 @@ pub fn copySelectionToClipboard(state: *AppState) !void {
         return;
     }
 
-    try state.canvas.cacheClipboardPng();
+    const scale = if (state.wayland.?.outputs.items.len > 0)
+        state.wayland.?.outputs.items[0].scale
+    else
+        1.0;
+
+    try state.canvas.cacheClipboardPng(scale);
 
     const data_source = try state.wayland.?.data_device_manager.?.createDataSource();
 

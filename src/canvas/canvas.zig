@@ -52,13 +52,17 @@ pub const Canvas = struct {
         return null;
     }
 
-    pub fn writeToPngFd(self: *const Canvas, fd: std.posix.fd_t) !void {
+    pub fn writeToPngFd(self: *const Canvas, fd: std.posix.fd_t, scale: f32) !void {
         const sel = self.selection orelse return error.NoSelection;
+        const s: f64 = @floatCast(scale);
+
+        const phys_w = @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(sel.width)) * s)));
+        const phys_h = @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(sel.height)) * s)));
 
         const surface = c.cairo_image_surface_create(
             c.CAIRO_FORMAT_ARGB32,
-            sel.width,
-            sel.height,
+            phys_w,
+            phys_h,
         );
         defer c.cairo_surface_destroy(surface);
 
@@ -66,10 +70,16 @@ pub const Canvas = struct {
         defer c.cairo_destroy(cr);
 
         if (self.image_surface) |img_surface| {
-            c.cairo_set_source_surface(cr, img_surface, @floatFromInt(-sel.x), @floatFromInt(-sel.y));
+            c.cairo_save(cr.?);
+            // Map logical selection to physical source offset
+            const src_x = @as(f64, @floatFromInt(sel.x)) * s;
+            const src_y = @as(f64, @floatFromInt(sel.y)) * s;
+            c.cairo_set_source_surface(cr, img_surface, -src_x, -src_y);
             c.cairo_paint(cr);
+            c.cairo_restore(cr.?);
         }
 
+        c.cairo_scale(cr, s, s);
         for (self.elements.items) |*element| {
             element.render(cr.?, sel.x, sel.y);
         }
@@ -91,17 +101,16 @@ pub const Canvas = struct {
         }
     }
 
-    pub fn cacheClipboardPng(self: *Canvas) !void {
+    pub fn cacheClipboardPng(self: *Canvas, scale: f32) !void {
         if (self.cached_clipboard_png) |old| {
             self.allocator.free(old);
         }
 
         const tmp_path = "/tmp/sneemok_clipboard.png";
-
         {
             const file = try std.fs.createFileAbsolute(tmp_path, .{});
             defer file.close();
-            try self.writeToPngFd(file.handle);
+            try self.writeToPngFd(file.handle, scale);
         }
 
         const file = try std.fs.openFileAbsolute(tmp_path, .{});
